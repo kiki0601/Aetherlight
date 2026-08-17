@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private int _pixelWidth;
     private int _pixelHeight;
     private bool _loading;
+    private string? _currentPhotoPath;
 
     public MainWindow()
     {
@@ -78,7 +79,7 @@ public partial class MainWindow : Window
                 Filmstrip.Children.Add(thumb);
 
                 if (_originalSource == null)
-                    SetCurrentPhoto(source, path);
+                    SelectPhoto(path);
             }
             catch (Exception ex)
             {
@@ -105,6 +106,7 @@ public partial class MainWindow : Window
 
     private void SetCurrentPhoto(BitmapSource source, string path)
     {
+        _currentPhotoPath = path;
         _originalSource = source;
         _loading = true;
         ExposureSlider.Value = 0;
@@ -122,8 +124,8 @@ public partial class MainWindow : Window
         var converted = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
         _pixelWidth = converted.PixelWidth;
         _pixelHeight = converted.PixelHeight;
-        _originalPixels = new byte[_pixelWidth * _pixelHeight * 4];
-        converted.CopyPixels(_originalPixels, _pixelWidth * 4, 0);
+        _originalPixels = new byte[checked(_pixelWidth * _pixelHeight * 4)];
+        converted.CopyPixels(_originalPixels, checked(_pixelWidth * 4), 0);
         ApplyAdjustments();
 
         Preview.Source = _editedBitmap;
@@ -225,9 +227,8 @@ public partial class MainWindow : Window
             double highlightMask = Math.Clamp((luma - 0.5) * 2.0, 0, 1);
             double whiteMask = Math.Clamp((luma - 0.7) / 0.3, 0, 1);
             double blackMask = Math.Clamp((0.3 - luma) / 0.3, 0, 1);
-            r += shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
-            g += shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
-            b += shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
+            double tonal = shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
+            r += tonal; g += tonal; b += tonal;
 
             r += temperature * 0.10 + tint * 0.03;
             b -= temperature * 0.10;
@@ -287,15 +288,51 @@ public partial class MainWindow : Window
     {
         if (_editedBitmap == null)
         {
-            MessageBox.Show("Import and select a photo first.", "Aetherlight");
+            MessageBox.Show("Import and select a photo first.", "Aetherlight", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var dlg = new SaveFileDialog { Filter = "JPEG|*.jpg|PNG|*.png|TIFF|*.tif", FileName = "Aetherlight Export.jpg" };
-        if (dlg.ShowDialog() != true) return;
-        BitmapEncoder encoder = IOPath.GetExtension(dlg.FileName).Equals(".png", StringComparison.OrdinalIgnoreCase) ? new PngBitmapEncoder() : new JpegBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(_editedBitmap));
-        using var stream = System.IO.File.Create(dlg.FileName);
-        encoder.Save(stream);
-        StatusText.Text = $"Aetherlight • Exported {IOPath.GetFileName(dlg.FileName)}";
+
+        var dlg = new SaveFileDialog
+        {
+            Title = "Export Photo",
+            Filter = "JPEG Image (*.jpg)|*.jpg|PNG Image (*.png)|*.png|TIFF Image (*.tif)|*.tif",
+            DefaultExt = ".jpg",
+            AddExtension = true,
+            FileName = _currentPhotoPath == null ? "Aetherlight Export.jpg" : IOPath.GetFileNameWithoutExtension(_currentPhotoPath) + " - Aetherlight.jpg",
+            OverwritePrompt = true
+        };
+
+        bool? result = dlg.ShowDialog(this);
+        if (result != true) return;
+
+        try
+        {
+            BitmapEncoder encoder;
+            string extension = IOPath.GetExtension(dlg.FileName).ToLowerInvariant();
+            if (extension == ".png") encoder = new PngBitmapEncoder();
+            else if (extension == ".tif" || extension == ".tiff") encoder = new TiffBitmapEncoder();
+            else
+            {
+                var jpeg = new JpegBitmapEncoder { QualityLevel = 100 };
+                encoder = jpeg;
+            }
+
+            var frame = BitmapFrame.Create(_editedBitmap);
+            encoder.Frames.Add(frame);
+
+            using (var stream = new FileStream(dlg.FileName, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                encoder.Save(stream);
+                stream.Flush(true);
+            }
+
+            StatusText.Text = $"Aetherlight • Exported • {IOPath.GetFileName(dlg.FileName)}";
+            MessageBox.Show($"Export complete.\n\n{dlg.FileName}", "Aetherlight", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = "Aetherlight • Export failed";
+            MessageBox.Show($"Aetherlight could not export this photo.\n\n{ex.Message}", "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 }

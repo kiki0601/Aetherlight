@@ -16,13 +16,11 @@ public partial class MainWindow : Window
     private int _pixelWidth;
     private int _pixelHeight;
     private bool _loading;
-    private string? _currentPath;
 
     public MainWindow()
     {
         InitializeComponent();
         Loaded += (_, _) => DrawHistogram();
-        SizeChanged += (_, _) => DrawHistogram();
     }
 
     private void ShowView(Grid view)
@@ -36,7 +34,6 @@ public partial class MainWindow : Window
     }
 
     private void Library_Click(object sender, RoutedEventArgs e) => ShowView(LibraryView);
-
     private void Develop_Click(object sender, RoutedEventArgs e)
     {
         ShowView(DevelopView);
@@ -44,7 +41,6 @@ public partial class MainWindow : Window
         DevelopEmpty.Visibility = DevelopPreview.Source == null ? Visibility.Visible : Visibility.Collapsed;
         DrawHistogram();
     }
-
     private void Map_Click(object sender, RoutedEventArgs e) => ShowView(MapView);
     private void Print_Click(object sender, RoutedEventArgs e) => ShowView(PrintView);
     private void Web_Click(object sender, RoutedEventArgs e) => ShowView(WebView);
@@ -62,13 +58,12 @@ public partial class MainWindow : Window
         LibraryCount.Text = $"{dlg.FileNames.Length} photo{(dlg.FileNames.Length == 1 ? "" : "s")}";
         StatusText.Text = "Aetherlight • Importing…";
 
-        foreach (string path in dlg.FileNames)
+        foreach (var path in dlg.FileNames)
         {
             try
             {
-                BitmapSource? source = await Task.Run(() => LoadPhoto(path, true));
+                var source = await Task.Run(() => LoadPhoto(path, true));
                 if (source == null) continue;
-
                 var thumb = new Image
                 {
                     Source = source,
@@ -98,7 +93,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            BitmapSource? source = LoadPhoto(path, false);
+            var source = LoadPhoto(path, false);
             if (source != null) SetCurrentPhoto(source, path);
         }
         catch (Exception ex)
@@ -109,7 +104,6 @@ public partial class MainWindow : Window
 
     private void SetCurrentPhoto(BitmapSource source, string path)
     {
-        _currentPath = path;
         _originalSource = source;
         _loading = true;
         ExposureSlider.Value = 0;
@@ -124,10 +118,10 @@ public partial class MainWindow : Window
         SaturationSlider.Value = 0;
         _loading = false;
 
-        BitmapSource converted = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        var converted = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
         _pixelWidth = converted.PixelWidth;
         _pixelHeight = converted.PixelHeight;
-        _originalPixels = new byte[checked(_pixelWidth * _pixelHeight * 4)];
+        _originalPixels = new byte[_pixelWidth * _pixelHeight * 4];
         converted.CopyPixels(_originalPixels, _pixelWidth * 4, 0);
         ApplyAdjustments();
 
@@ -142,10 +136,8 @@ public partial class MainWindow : Window
 
     private static BitmapSource? LoadPhoto(string path, bool thumbnail)
     {
-        string ext = IOPath.GetExtension(path).ToLowerInvariant();
-        bool isRaw = ext is ".cr3" or ".arw" or ".raf" or ".dng" or ".nef" or ".nrw" or ".orf" or ".rw2" or ".pef" or ".srw";
-
-        if (isRaw)
+        var ext = IOPath.GetExtension(path).ToLowerInvariant();
+        if (ext is ".cr3" or ".arw" or ".raf" or ".dng" or ".nef" or ".nrw" or ".orf" or ".rw2" or ".pef" or ".srw")
         {
             using RawContext raw = RawContext.OpenFile(path);
             using ProcessedImage image = raw.ExportRawImage(c =>
@@ -157,13 +149,12 @@ public partial class MainWindow : Window
                 c.Interpolation = true;
             });
 
-            // LibRaw returns RGB24. Convert it explicitly to BGRA32 for WPF.
             int width = Convert.ToInt32(image.Width);
             int height = Convert.ToInt32(image.Height);
             byte[] rgb = image.AsSpan<byte>().ToArray();
             int expected = checked(width * height * 3);
             if (rgb.Length < expected)
-                throw new InvalidDataException($"RAW decoder returned {rgb.Length} bytes for a {width}×{height} image.");
+                throw new System.IO.InvalidDataException($"RAW decoder returned {rgb.Length} bytes for a {width}×{height} image.");
 
             byte[] bgra = new byte[checked(width * height * 4)];
             int src = 0;
@@ -182,18 +173,14 @@ public partial class MainWindow : Window
                 }
             }
 
-            // LibRaw's processed dimensions are already its output dimensions.
-            // Keeping the pixel buffer in that order avoids WPF applying an incorrect rotation.
-            BitmapSource result = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, bgra, width * 4);
-            result.Freeze();
-            return result;
+            return BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, bgra, width * 4);
         }
 
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.UriSource = new Uri(IOPath.GetFullPath(path));
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        if (thumbnail) bitmap.DecodePixelWidth = 900;
+        bitmap.DecodePixelWidth = thumbnail ? 900 : 0;
         bitmap.EndInit();
         bitmap.Freeze();
         return bitmap;
@@ -207,10 +194,10 @@ public partial class MainWindow : Window
 
     private void ApplyAdjustments()
     {
-        if (_originalPixels == null || _pixelWidth <= 0 || _pixelHeight <= 0) return;
+        if (_originalPixels == null || _pixelWidth == 0) return;
 
         byte[] pixels = new byte[_originalPixels.Length];
-        double exposure = Math.Pow(2.0, ExposureSlider.Value);
+        double exposure = Math.Pow(2, ExposureSlider.Value);
         double contrast = (259.0 * (ContrastSlider.Value + 255.0)) / (255.0 * (259.0 - ContrastSlider.Value));
         double saturation = 1.0 + SaturationSlider.Value / 100.0;
         double vibrance = VibranceSlider.Value / 100.0;
@@ -227,23 +214,19 @@ public partial class MainWindow : Window
             double g = _originalPixels[i + 1] / 255.0;
             double r = _originalPixels[i + 2] / 255.0;
 
-            r *= exposure;
-            g *= exposure;
-            b *= exposure;
-
+            r *= exposure; g *= exposure; b *= exposure;
             r = (r - 0.5) * contrast + 0.5;
             g = (g - 0.5) * contrast + 0.5;
             b = (b - 0.5) * contrast + 0.5;
 
-            double luma = Math.Clamp(0.2126 * r + 0.7152 * g + 0.0722 * b, 0, 1);
+            double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
             double shadowMask = Math.Clamp(1.0 - luma * 2.0, 0, 1);
             double highlightMask = Math.Clamp((luma - 0.5) * 2.0, 0, 1);
             double whiteMask = Math.Clamp((luma - 0.7) / 0.3, 0, 1);
             double blackMask = Math.Clamp((0.3 - luma) / 0.3, 0, 1);
-            double tonal = shadows * shadowMask * 0.35 - highlights * highlightMask * 0.25 + whites * whiteMask * 0.25 - blacks * blackMask * 0.25;
-            r += tonal;
-            g += tonal;
-            b += tonal;
+            r += shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
+            g += shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
+            b += shadows * shadowMask * 0.35 + highlights * highlightMask * -0.25 + whites * whiteMask * 0.25 + blacks * blackMask * -0.25;
 
             r += temperature * 0.10 + tint * 0.03;
             b -= temperature * 0.10;
@@ -275,38 +258,27 @@ public partial class MainWindow : Window
     {
         if (!IsLoaded || _editedBitmap == null || HistogramCanvas == null) return;
         HistogramCanvas.Children.Clear();
-
-        const int bins = 256;
-        int[] red = new int[bins];
-        int[] green = new int[bins];
-        int[] blue = new int[bins];
-        byte[] data = new byte[checked(_pixelWidth * _pixelHeight * 4)];
+        int bins = 256;
+        int[] red = new int[bins], green = new int[bins], blue = new int[bins];
+        byte[] data = new byte[_pixelWidth * _pixelHeight * 4];
         _editedBitmap.CopyPixels(data, _pixelWidth * 4, 0);
-
         for (int i = 0; i < data.Length; i += 4)
         {
-            blue[data[i]]++;
-            green[data[i + 1]]++;
-            red[data[i + 2]]++;
+            blue[data[i]]++; green[data[i + 1]]++; red[data[i + 2]]++;
         }
-
         int max = Math.Max(1, Math.Max(red.Max(), Math.Max(green.Max(), blue.Max())));
-        double width = Math.Max(10, HistogramCanvas.ActualWidth);
-        double height = Math.Max(10, HistogramCanvas.ActualHeight);
-        AddHistogramLine(red, width, height, Brushes.Red, max);
-        AddHistogramLine(green, width, height, Brushes.LimeGreen, max);
-        AddHistogramLine(blue, width, height, Brushes.DodgerBlue, max);
+        double w = Math.Max(300, HistogramCanvas.ActualWidth > 10 ? HistogramCanvas.ActualWidth : 330);
+        double h = 140;
+        AddHistogramLine(red, w, h, Brushes.Red, max);
+        AddHistogramLine(green, w, h, Brushes.LimeGreen, max);
+        AddHistogramLine(blue, w, h, Brushes.DodgerBlue, max);
     }
 
     private void AddHistogramLine(int[] bins, double width, double height, Brush brush, int max)
     {
-        var line = new System.Windows.Shapes.Polyline { Stroke = brush, StrokeThickness = 1, Opacity = 0.65 };
+        var line = new Polyline { Stroke = brush, StrokeThickness = 1, Opacity = 0.65 };
         for (int i = 0; i < bins.Length; i++)
-        {
-            double x = i * width / 255.0;
-            double y = height - (bins[i] / (double)max) * Math.Max(1, height - 4);
-            line.Points.Add(new Point(x, y));
-        }
+            line.Points.Add(new Point(i * width / 255.0, height - (bins[i] / (double)max) * (height - 4)));
         HistogramCanvas.Children.Add(line);
     }
 
@@ -317,21 +289,9 @@ public partial class MainWindow : Window
             MessageBox.Show("Import and select a photo first.", "Aetherlight");
             return;
         }
-
-        var dlg = new SaveFileDialog
-        {
-            Filter = "JPEG|*.jpg|PNG|*.png|TIFF|*.tif",
-            FileName = "Aetherlight Export.jpg"
-        };
+        var dlg = new SaveFileDialog { Filter = "JPEG|*.jpg|PNG|*.png|TIFF|*.tif", FileName = "Aetherlight Export.jpg" };
         if (dlg.ShowDialog() != true) return;
-
-        string extension = IOPath.GetExtension(dlg.FileName).ToLowerInvariant();
-        BitmapEncoder encoder = extension switch
-        {
-            ".png" => new PngBitmapEncoder(),
-            ".tif" or ".tiff" => new TiffBitmapEncoder(),
-            _ => new JpegBitmapEncoder()
-        };
+        BitmapEncoder encoder = IOPath.GetExtension(dlg.FileName).Equals(".png", StringComparison.OrdinalIgnoreCase) ? new PngBitmapEncoder() : new JpegBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(_editedBitmap));
         using var stream = System.IO.File.Create(dlg.FileName);
         encoder.Save(stream);

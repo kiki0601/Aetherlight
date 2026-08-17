@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using Sdcb.LibRaw;
+using System.IO;
 using IOPath = System.IO.Path;
 using System.Windows;
 using System.Windows.Controls;
@@ -162,11 +163,9 @@ public partial class MainWindow : Window
 
             if (thumbnail)
             {
-                // Use the embedded JPEG preview for the filmstrip. Modern RAW files commonly
-                // contain a camera-rendered preview, and LibRaw exposes it directly.
                 using ProcessedImage preview = raw.ExportThumbnail(0);
                 byte[] jpeg = preview.AsSpan<byte>().ToArray();
-                if (jpeg.Length == 0) throw new System.IO.InvalidDataException("The RAW file contains no usable embedded preview.");
+                if (jpeg.Length == 0) throw new InvalidDataException("The RAW file contains no usable embedded preview.");
                 using var ms = new MemoryStream(jpeg);
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
@@ -177,8 +176,6 @@ public partial class MainWindow : Window
                 return bmp;
             }
 
-            // LibRaw's ExportRawImage is the shortcut for unpack + demosaic + memory image.
-            // Its default user_flip=-1 means the RAW's recorded orientation is used.
             using ProcessedImage image = raw.ExportRawImage(c =>
             {
                 c.HalfSize = false;
@@ -194,7 +191,7 @@ public partial class MainWindow : Window
             byte[] rgb = image.AsSpan<byte>().ToArray();
             int expected = checked(width * height * 3);
             if (rgb.Length < expected)
-                throw new System.IO.InvalidDataException($"RAW decoder returned {rgb.Length} bytes for a {width}×{height} image.");
+                throw new InvalidDataException($"RAW decoder returned {rgb.Length} bytes for a {width}×{height} image.");
 
             byte[] bgra = new byte[checked(width * height * 4)];
             int src = 0;

@@ -19,22 +19,25 @@ public partial class MainWindow
         _whiteBalanceMetadataFound = false;
         _whiteBalanceLoadedPath = path ?? string.Empty;
 
-        if (!string.IsNullOrWhiteSpace(path) && path.EndsWith(".cr3", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(path))
         {
-            if (TryReadCanonCr3WhiteBalance(path, out int cr3Temp, out int cr3Tint))
+            // IMPORTANT: MetadataExtractor is the primary source. The previous
+            // implementation tried the hand-written CR3 scanner first, and that
+            // scanner could find an unrelated valid 6500K value elsewhere in the
+            // CR3 and stop before the real ColorTempAsShot tag was examined.
+            bool metadataRead = TryReadGenericMetadata(path);
+
+            // Only use the binary Canon reader when the metadata library did not
+            // give us a reliable as-shot temperature.
+            if (!metadataRead && path.EndsWith(".cr3", StringComparison.OrdinalIgnoreCase))
             {
-                _asShotTemperature = RoundTemperatureForDisplay(cr3Temp);
-                _asShotTint = cr3Tint;
-                _whiteBalanceMetadataFound = true;
+                if (TryReadCanonCr3WhiteBalance(path, out int cr3Temp, out int cr3Tint))
+                {
+                    _asShotTemperature = RoundTemperatureForDisplay(cr3Temp);
+                    _asShotTint = cr3Tint;
+                    _whiteBalanceMetadataFound = true;
+                }
             }
-            else
-            {
-                TryReadGenericMetadata(path);
-            }
-        }
-        else if (!string.IsNullOrWhiteSpace(path))
-        {
-            TryReadGenericMetadata(path);
         }
 
         _loading = true;
@@ -44,35 +47,46 @@ public partial class MainWindow
         UpdateWhiteBalanceLabels();
     }
 
-    private void TryReadGenericMetadata(string path)
+    private bool TryReadGenericMetadata(string path)
     {
         try
         {
             var directories = ImageMetadataReader.ReadMetadata(path);
-            double? temperature = null, tint = null;
+
+            double? temperature = null;
+            double? tint = null;
+            int temperatureScore = -1;
+            int tintScore = -1;
+
             foreach (var directory in directories)
             foreach (var tag in directory.Tags)
             {
                 string name = tag.Name.Trim();
                 string description = (tag.Description ?? string.Empty).Trim();
-                string normalizedName = name.Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+                string normalized = NormalizeTagName(name);
 
-                if (temperature == null &&
-                    (normalizedName.Contains("ColorTempAsShot", StringComparison.OrdinalIgnoreCase) ||
-                     normalizedName.Contains("ColorTemperatureAsShot", StringComparison.OrdinalIgnoreCase) ||
-                     name.Contains("Color Temperature", StringComparison.OrdinalIgnoreCase)))
+                // Canon CR3 can expose several temperature-related fields. We must
+                // rank them instead of taking the first one encountered.
+                int tempScore = GetTemperatureTagScore(normalized, name);
+                if (tempScore >= 0)
                 {
                     var value = ExtractFirstNumber(description);
-                    if (IsKelvin(value)) temperature = value;
+                    if (IsKelvin(value) && tempScore > temperatureScore)
+                    {
+                        temperature = value;
+                        temperatureScore = tempScore;
+                    }
                 }
 
-                if (tint == null &&
-                    (normalizedName.Contains("WBShiftGM", StringComparison.OrdinalIgnoreCase) ||
-                     normalizedName.Contains("WBShiftGreenMagenta", StringComparison.OrdinalIgnoreCase) ||
-                     name.Contains("Green/Magenta", StringComparison.OrdinalIgnoreCase)))
+                int tintScoreCandidate = GetTintTagScore(normalized, name);
+                if (tintScoreCandidate >= 0)
                 {
                     var value = ExtractSignedNumber(description);
-                    if (IsTint(value)) tint = value;
+                    if (IsTint(value) && tintScoreCandidate > tintScore)
+                    {
+                        tint = value;
+                        tintScore = tintScoreCandidate;
+                    }
                 }
             }
 
@@ -81,16 +95,50 @@ public partial class MainWindow
                 _asShotTemperature = RoundTemperatureForDisplay((int)Math.Round(temperature.Value));
                 _whiteBalanceMetadataFound = true;
             }
+
             if (tint.HasValue)
             {
                 _asShotTint = (int)Math.Round(tint.Value);
                 _whiteBalanceMetadataFound = true;
             }
+
+            return temperature.HasValue;
         }
         catch
         {
             // Metadata is optional. RAW development must continue if it cannot be read.
+            return false;
         }
+    }
+
+    private static string NormalizeTagName(string name) =>
+        name.Replace(" ", string.Empty)
+            .Replace("_", string.Empty)
+            .Replace("-", string.Empty)
+            .Replace("/", string.Empty);
+
+    private static int GetTemperatureTagScore(string normalized, string originalName)
+    {
+        // Highest priority: the actual as-shot Canon field.
+        if (normalized.Contains("ColorTempAsShot", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("ColorTemperatureAsShot", StringComparison.OrdinalIgnoreCase)) return 100;
+
+        // Other explicit Kelvin/as-shot fields are useful fallbacks.
+        if (normalized.Contains("ColorTempKelvin", StringComparison.OrdinalIgnoreCase)) return 90;
+        if (normalized.Contains("ColorTemperatureKelvin", StringComparison.OrdinalIgnoreCase)) return 90;
+        if (normalized.Contains("ColorTempMeasured", StringComparison.OrdinalIgnoreCase)) return 70;
+        if (normalized.Equals("ColorTemperature", StringComparison.OrdinalIgnoreCase)) return 60;
+        if (originalName.Contains("Color Temperature", StringComparison.OrdinalIgnoreCase)) return 50;
+        return -1;
+    }
+
+    private static int GetTintTagScore(string normalized, string originalName)
+    {
+        if (normalized.Contains("WBShiftGM", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("WBShiftGreenMagenta", StringComparison.OrdinalIgnoreCase)) return 100;
+        if (normalized.Contains("GreenMagenta", StringComparison.OrdinalIgnoreCase)) return 90;
+        if (originalName.Contains("Green/Magenta", StringComparison.OrdinalIgnoreCase)) return 80;
+        return -1;
     }
 
     private static int RoundTemperatureForDisplay(int kelvin) =>
@@ -105,57 +153,14 @@ public partial class MainWindow
         {
             byte[] bytes = File.ReadAllBytes(path);
 
-            // First try MetadataExtractor's Canon maker-note representation. On current
-            // Canon CR3 files this is the cleanest route when the nested TIFF directory
-            // has been exposed by the library.
-            try
-            {
-                var directories = ImageMetadataReader.ReadMetadata(path);
-                double? metadataTemp = null;
-                double? metadataTint = null;
-                foreach (var directory in directories)
-                foreach (var tag in directory.Tags)
-                {
-                    string name = tag.Name.Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
-                    string description = tag.Description ?? string.Empty;
-                    if (metadataTemp == null && name.Contains("ColorTempAsShot", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var value = ExtractFirstNumber(description);
-                        if (IsKelvin(value)) metadataTemp = value;
-                    }
-                    if (metadataTint == null && name.Contains("WBShiftGM", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var value = ExtractSignedNumber(description);
-                        if (IsTint(value)) metadataTint = value;
-                    }
-                }
-                if (metadataTemp.HasValue)
-                {
-                    temperature = (int)Math.Round(metadataTemp.Value);
-                    tint = metadataTint.HasValue ? (int)Math.Round(metadataTint.Value) : 0;
-                    return true;
-                }
-            }
-            catch
-            {
-                // Fall through to the binary ColorData reader.
-            }
-
-            // Canon stores ColorData11 in MakerNotes tag 0x4001. ExifTool documents
-            // R6 Mark II/R7/R50/R3 ColorData11 index 0 as the version and index 109
-            // as ColorTempAsShot. The R6 Mark II uses version 48. The tag is a binary
-            // int16 array inside the CR3 TIFF/MakerNote structure, so do not assume that
-            // the TIFF entry itself uses SHORT type. Some CR3 writers expose it as UNDEFINED.
+            // Canon ColorData11. Accept both SHORT and UNDEFINED representations.
             if (TryReadCanonColorDataArray(bytes, 48, 109, out int temp48))
             {
                 temperature = temp48;
-                // The Canon ProcessingInfo green/magenta shift is optional. Keep zero
-                // here when the file does not expose a reliable camera shift value.
                 TryReadCanonProcessingTint(bytes, out tint);
                 return true;
             }
 
-            // EOS R3 uses the same ColorData11 layout with version 34.
             if (TryReadCanonColorDataArray(bytes, 34, 109, out int temp34))
             {
                 temperature = temp34;
@@ -163,23 +168,20 @@ public partial class MainWindow
                 return true;
             }
 
-            // Last-resort scan for the ColorData11 payload itself. This deliberately
-            // validates the version, the four as-shot WB coefficients at index 105,
-            // and the Kelvin value at index 109 before accepting a match. This avoids
-            // depending on a particular CR3 TIFF nesting/offset layout.
+            // Last-resort payload scan, with strict WB coefficient validation.
             if (TryScanCanonColorData(bytes, out int scannedTemp))
             {
                 temperature = scannedTemp;
                 TryReadCanonProcessingTint(bytes, out tint);
                 return true;
             }
-
-            return false;
         }
         catch
         {
-            return false;
+            // Ignore optional RAW metadata errors.
         }
+
+        return false;
     }
 
     private static bool TryReadCanonColorDataArray(byte[] bytes, short expectedVersion, int tempIndex, out int temperature)
@@ -187,9 +189,6 @@ public partial class MainWindow
         temperature = 0;
         try
         {
-            // MakerNotes ColorData is an int16 array. Accept either TIFF SHORT (3)
-            // or UNDEFINED (7), because CR3 containers can expose the same payload
-            // through different TIFF representations.
             for (int tiffStart = 0; tiffStart <= bytes.Length - 8; tiffStart++)
             {
                 if (bytes[tiffStart] != (byte)'I' || bytes[tiffStart + 1] != (byte)'I' ||
@@ -213,10 +212,7 @@ public partial class MainWindow
 
                     int byteCount = type == 3 ? checked((int)count * 2) : checked((int)count);
                     int valueOffset;
-                    if (byteCount <= 4)
-                    {
-                        valueOffset = entry + 8;
-                    }
+                    if (byteCount <= 4) valueOffset = entry + 8;
                     else
                     {
                         uint relative = ReadU32(bytes, entry + 8);
@@ -227,10 +223,12 @@ public partial class MainWindow
                     if (valueOffset < 0 || valueOffset + byteCount > bytes.Length) continue;
                     int version = ReadI16(bytes, valueOffset);
                     if (version != expectedVersion) continue;
+
                     int tempOffset = valueOffset + tempIndex * 2;
                     if (tempOffset + 2 > bytes.Length) continue;
                     int value = ReadI16(bytes, tempOffset);
                     if (!IsKelvin(value)) continue;
+
                     temperature = value;
                     return true;
                 }
@@ -238,7 +236,7 @@ public partial class MainWindow
         }
         catch
         {
-            // Continue to the raw payload scan.
+            // Fall through to the raw payload scan.
         }
         return false;
     }
@@ -246,13 +244,12 @@ public partial class MainWindow
     private static bool TryScanCanonColorData(byte[] bytes, out int temperature)
     {
         temperature = 0;
-        const int versionOffset = 0;
         const int wbOffset = 105 * 2;
         const int tempOffset = 109 * 2;
 
         for (int i = 0; i + tempOffset + 2 <= bytes.Length; i += 2)
         {
-            short version = ReadI16(bytes, i + versionOffset);
+            short version = ReadI16(bytes, i);
             if (version != 48 && version != 34) continue;
 
             int r = ReadI16(bytes, i + wbOffset);
@@ -277,8 +274,6 @@ public partial class MainWindow
     private static bool TryReadCanonProcessingTint(byte[] bytes, out int tint)
     {
         tint = 0;
-        // ProcessingInfo is a small int16 record. Search for a plausible Kelvin value
-        // followed by a plausible green/magenta shift at Canon's known indexes.
         for (int i = 0; i + 38 <= bytes.Length; i += 2)
         {
             int processingTemp = ReadI16(bytes, i + 18);
@@ -302,16 +297,6 @@ public partial class MainWindow
 
     private void UpdateWhiteBalanceLabels()
     {
-        // Guarantee that the metadata reader is invoked when the current photo changes.
-        // The previous implementation could leave the UI at its 6500/0 defaults because
-        // the import path changed without calling LoadAsShotWhiteBalance.
-        if (!_loading && !string.IsNullOrWhiteSpace(_currentPhotoPath) &&
-            !string.Equals(_whiteBalanceLoadedPath, _currentPhotoPath, StringComparison.OrdinalIgnoreCase))
-        {
-            LoadAsShotWhiteBalance(_currentPhotoPath);
-            return;
-        }
-
         int currentTemperature = _asShotTemperature + (int)Math.Round(TemperatureSlider.Value);
         int currentTint = _asShotTint + (int)Math.Round(TintSlider.Value);
         TemperatureValue.Text = $"{currentTemperature} K";

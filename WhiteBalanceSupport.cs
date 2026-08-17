@@ -9,6 +9,8 @@ namespace Aetherlight;
 
 public partial class MainWindow
 {
+    private const double MinKelvin = 2000.0;
+    private const double MaxKelvin = 50000.0;
     private int _asShotTemperature = 6500;
     private int _asShotTint = 0;
     private bool _whiteBalanceMetadataFound;
@@ -29,26 +31,37 @@ public partial class MainWindow
         if (e.OriginalSource != window.TemperatureSlider)
             return;
 
-        // The TemperatureSlider stores the real Kelvin value for the UI, but the
-        // existing renderer expects a relative adjustment. Intercept the routed
-        // event before Adjustment_ValueChanged, temporarily feed the renderer the
-        // delta from as-shot, then restore the real Kelvin value for the thumb.
         e.Handled = true;
-        double actualKelvin = window.TemperatureSlider.Value;
+        double sliderPosition = window.TemperatureSlider.Value;
+        double actualKelvin = SliderPositionToKelvin(sliderPosition);
         double deltaKelvin = actualKelvin - window._asShotTemperature;
 
         window._whiteBalanceSliderHandling = true;
         try
         {
+            // Existing renderer consumes a relative temperature adjustment.
+            // The UI itself remains an absolute Kelvin control.
             window.TemperatureSlider.Value = deltaKelvin;
             window.ApplyAdjustments();
         }
         finally
         {
-            window.TemperatureSlider.Value = actualKelvin;
+            window.TemperatureSlider.Value = sliderPosition;
             window._whiteBalanceSliderHandling = false;
             window.UpdateWhiteBalanceLabels();
         }
+    }
+
+    private static double KelvinToSliderPosition(double kelvin)
+    {
+        kelvin = Math.Clamp(kelvin, MinKelvin, MaxKelvin);
+        return Math.Log(kelvin / MinKelvin) / Math.Log(MaxKelvin / MinKelvin);
+    }
+
+    private static double SliderPositionToKelvin(double position)
+    {
+        position = Math.Clamp(position, 0, 1);
+        return MinKelvin * Math.Pow(MaxKelvin / MinKelvin, position);
     }
 
     private void LoadAsShotWhiteBalance(string path)
@@ -74,13 +87,15 @@ public partial class MainWindow
         }
 
         _loading = true;
-        // RAW UI uses absolute Kelvin and absolute Adobe-style tint. The thumb
-        // therefore starts at the camera's as-shot value, not at zero.
-        TemperatureSlider.Minimum = 2000;
-        TemperatureSlider.Maximum = 50000;
-        TemperatureSlider.SmallChange = 100;
-        TemperatureSlider.LargeChange = 500;
-        TemperatureSlider.Value = Math.Clamp(_asShotTemperature, 2000, 50000);
+        // The slider uses a normalized logarithmic position so the useful
+        // photographic range is spread naturally across the control. Lightroom
+        // presents RAW Temp as 2000-50000 K, with lower values on the blue/cool
+        // side and higher values on the yellow/warm side.
+        TemperatureSlider.Minimum = 0;
+        TemperatureSlider.Maximum = 1;
+        TemperatureSlider.SmallChange = 0.005;
+        TemperatureSlider.LargeChange = 0.025;
+        TemperatureSlider.Value = KelvinToSliderPosition(_asShotTemperature);
 
         TintSlider.Minimum = -150;
         TintSlider.Maximum = 150;
@@ -96,7 +111,6 @@ public partial class MainWindow
         try
         {
             var directories = ImageMetadataReader.ReadMetadata(path);
-
             double? temperature = null;
             double? tint = null;
             int temperatureScore = -1;
@@ -140,7 +154,7 @@ public partial class MainWindow
 
             if (tint.HasValue)
             {
-                _asShotTint = (int)Math.Round(tint.Value);
+                _asShotTint = Math.Clamp((int)Math.Round(tint.Value), -150, 150);
                 _whiteBalanceMetadataFound = true;
             }
 
@@ -226,8 +240,7 @@ public partial class MainWindow
         {
             for (int tiffStart = 0; tiffStart <= bytes.Length - 8; tiffStart++)
             {
-                if (bytes[tiffStart] != (byte)'I' || bytes[tiffStart + 1] != (byte)'I' ||
-                    bytes[tiffStart + 2] != 42 || bytes[tiffStart + 3] != 0)
+                if (bytes[tiffStart] != (byte)'I' || bytes[tiffStart + 1] != (byte)'I' || bytes[tiffStart + 2] != 42 || bytes[tiffStart + 3] != 0)
                     continue;
 
                 uint ifdOffset = ReadU32(bytes, tiffStart + 4);
@@ -292,8 +305,7 @@ public partial class MainWindow
             int b = ReadI16(bytes, i + wbOffset + 6);
             int temp = ReadI16(bytes, i + tempOffset);
 
-            if (!IsPlausibleWbCoefficient(r) || !IsPlausibleWbCoefficient(g1) ||
-                !IsPlausibleWbCoefficient(g2) || !IsPlausibleWbCoefficient(b)) continue;
+            if (!IsPlausibleWbCoefficient(r) || !IsPlausibleWbCoefficient(g1) || !IsPlausibleWbCoefficient(g2) || !IsPlausibleWbCoefficient(b)) continue;
             if (Math.Abs(g1 - g2) > 200) continue;
             if (!IsKelvin(temp)) continue;
 
@@ -331,7 +343,7 @@ public partial class MainWindow
 
     private void UpdateWhiteBalanceLabels()
     {
-        int currentTemperature = (int)Math.Round(TemperatureSlider.Value);
+        int currentTemperature = (int)Math.Round(SliderPositionToKelvin(TemperatureSlider.Value) / 100.0) * 100;
         int currentTint = (int)Math.Round(TintSlider.Value);
         TemperatureValue.Text = $"{currentTemperature} K";
         TintValue.Text = currentTint.ToString("+0;-0;0", CultureInfo.InvariantCulture);

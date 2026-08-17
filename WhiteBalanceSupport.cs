@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using MetadataExtractor;
 
@@ -15,8 +16,6 @@ public partial class MainWindow
     private string _whiteBalanceLoadedPath = string.Empty;
     private bool _whiteBalanceSliderHandling;
 
-    // Register the routed-event handler without declaring another MainWindow
-    // static constructor. MainWindow already has one in MainWindow.xaml.cs.
     private static readonly bool _whiteBalanceHandlerRegistered = RegisterWhiteBalanceHandler();
 
     private static bool RegisterWhiteBalanceHandler()
@@ -40,20 +39,12 @@ public partial class MainWindow
         window._whiteBalanceSliderHandling = true;
         try
         {
-            // Temperature is displayed/stored as an absolute Kelvin value, but
-            // the existing pixel renderer expects a relative adjustment.
-            // Temporarily expose the relative delta to the renderer, then restore
-            // the absolute Kelvin value so the thumb and label remain correct.
             double absoluteTemperature = window.TemperatureSlider.Value;
             double temperatureDelta = absoluteTemperature - window._asShotTemperature;
-            double tintDelta = window.TintSlider.Value;
 
             window.TemperatureSlider.Value = temperatureDelta;
             window.ApplyAdjustments();
             window.TemperatureSlider.Value = absoluteTemperature;
-
-            // Tint is already a relative -150..150 adjustment in the renderer.
-            // Its displayed value is the camera's as-shot tint plus this delta.
             window.UpdateValueLabels();
         }
         finally

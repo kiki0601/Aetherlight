@@ -47,60 +47,76 @@ public partial class MainWindow : Window
     private void Print_Click(object sender, RoutedEventArgs e) => ShowView(PrintView);
     private void Web_Click(object sender, RoutedEventArgs e) => ShowView(WebView);
 
-    private async void Import_Click(object sender, RoutedEventArgs e)
+    private void Import_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
         {
             Multiselect = true,
             Filter = "RAW & Photos|*.cr3;*.arw;*.raf;*.dng;*.nef;*.nrw;*.orf;*.rw2;*.pef;*.srw;*.tif;*.tiff;*.jpg;*.jpeg;*.png|All files|*.*"
         };
-        if (dlg.ShowDialog() != true) return;
+        if (dlg.ShowDialog(this) != true) return;
 
         Filmstrip.Children.Clear();
         LibraryCount.Text = $"{dlg.FileNames.Length} photo{(dlg.FileNames.Length == 1 ? "" : "s")}";
         StatusText.Text = "Aetherlight • Importing…";
+        bool selectedFirst = false;
 
         foreach (var path in dlg.FileNames)
         {
             try
             {
-                var source = await Task.Run(() => LoadPhoto(path, true));
-                if (source == null) continue;
-                var thumb = new Image
+                BitmapSource thumbSource = LoadPhoto(path, true);
+                var thumbnail = new Image
                 {
-                    Source = source,
+                    Source = thumbSource,
                     Width = 150,
                     Height = 105,
                     Stretch = Stretch.UniformToFill,
                     Margin = new Thickness(4),
                     ToolTip = IOPath.GetFileName(path)
                 };
-                thumb.MouseLeftButtonUp += (_, _) => SelectPhoto(path);
-                Filmstrip.Children.Add(thumb);
+                thumbnail.MouseLeftButtonUp += (_, _) => SelectPhoto(path);
+                Filmstrip.Children.Add(thumbnail);
 
-                if (_originalSource == null)
+                if (!selectedFirst)
+                {
+                    selectedFirst = true;
                     SelectPhoto(path);
+                }
             }
             catch (Exception ex)
             {
-                StatusText.Text = $"Import failed: {IOPath.GetFileName(path)}";
-                System.Diagnostics.Debug.WriteLine(ex);
+                StatusText.Text = $"Import failed • {IOPath.GetFileName(path)}";
+                MessageBox.Show(
+                    $"Aetherlight could not import:\n\n{IOPath.GetFileName(path)}\n\n{ex.GetType().Name}:\n{ex.Message}",
+                    "Aetherlight • Import Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
         }
 
-        StatusText.Text = "Aetherlight • Ready";
+        StatusText.Text = Filmstrip.Children.Count > 0
+            ? $"Aetherlight • {Filmstrip.Children.Count} photo(s) imported"
+            : "Aetherlight • No photos imported";
     }
 
     private void SelectPhoto(string path)
     {
         try
         {
-            var source = LoadPhoto(path, false);
-            if (source != null) SetCurrentPhoto(source, path);
+            StatusText.Text = $"Aetherlight • Developing {IOPath.GetFileName(path)}…";
+            BitmapSource source = LoadPhoto(path, false);
+            SetCurrentPhoto(source, path);
+            ShowView(DevelopView);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Could not open {IOPath.GetFileName(path)}\n\n{ex.Message}", "Aetherlight", MessageBoxButton.OK, MessageBoxImage.Error);
+            StatusText.Text = $"Aetherlight • Could not open {IOPath.GetFileName(path)}";
+            MessageBox.Show(
+                $"Could not develop:\n\n{IOPath.GetFileName(path)}\n\n{ex.GetType().Name}:\n{ex.Message}",
+                "Aetherlight • RAW Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 
@@ -137,19 +153,40 @@ public partial class MainWindow : Window
         DrawHistogram();
     }
 
-    private static BitmapSource? LoadPhoto(string path, bool thumbnail)
+    private static BitmapSource LoadPhoto(string path, bool thumbnail)
     {
         var ext = IOPath.GetExtension(path).ToLowerInvariant();
         if (ext is ".cr3" or ".arw" or ".raf" or ".dng" or ".nef" or ".nrw" or ".orf" or ".rw2" or ".pef" or ".srw")
         {
             using RawContext raw = RawContext.OpenFile(path);
+
+            if (thumbnail)
+            {
+                // Use the embedded JPEG preview for the filmstrip. Modern RAW files commonly
+                // contain a camera-rendered preview, and LibRaw exposes it directly.
+                using ProcessedImage preview = raw.ExportThumbnail(0);
+                byte[] jpeg = preview.AsSpan<byte>().ToArray();
+                if (jpeg.Length == 0) throw new System.IO.InvalidDataException("The RAW file contains no usable embedded preview.");
+                using var ms = new MemoryStream(jpeg);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+
+            // LibRaw's ExportRawImage is the shortcut for unpack + demosaic + memory image.
+            // Its default user_flip=-1 means the RAW's recorded orientation is used.
             using ProcessedImage image = raw.ExportRawImage(c =>
             {
-                c.HalfSize = thumbnail;
+                c.HalfSize = false;
                 c.UseCameraWb = true;
                 c.OutputBps = 8;
                 c.Brightness = 1.0f;
                 c.Interpolation = true;
+                c.OutputTiff = false;
             });
 
             int width = Convert.ToInt32(image.Width);
@@ -260,8 +297,7 @@ public partial class MainWindow : Window
     {
         if (!IsLoaded || _editedBitmap == null || HistogramCanvas == null) return;
         HistogramCanvas.Children.Clear();
-        int bins = 256;
-        int[] red = new int[bins], green = new int[bins], blue = new int[bins];
+        int[] red = new int[256], green = new int[256], blue = new int[256];
         byte[] data = new byte[_pixelWidth * _pixelHeight * 4];
         _editedBitmap.CopyPixels(data, _pixelWidth * 4, 0);
         for (int i = 0; i < data.Length; i += 4)
@@ -302,8 +338,7 @@ public partial class MainWindow : Window
             OverwritePrompt = true
         };
 
-        bool? result = dlg.ShowDialog(this);
-        if (result != true) return;
+        if (dlg.ShowDialog(this) != true) return;
 
         try
         {
@@ -311,20 +346,12 @@ public partial class MainWindow : Window
             string extension = IOPath.GetExtension(dlg.FileName).ToLowerInvariant();
             if (extension == ".png") encoder = new PngBitmapEncoder();
             else if (extension == ".tif" || extension == ".tiff") encoder = new TiffBitmapEncoder();
-            else
-            {
-                var jpeg = new JpegBitmapEncoder { QualityLevel = 100 };
-                encoder = jpeg;
-            }
+            else encoder = new JpegBitmapEncoder { QualityLevel = 100 };
 
-            var frame = BitmapFrame.Create(_editedBitmap);
-            encoder.Frames.Add(frame);
-
-            using (var stream = new FileStream(dlg.FileName, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                encoder.Save(stream);
-                stream.Flush(true);
-            }
+            encoder.Frames.Add(BitmapFrame.Create(_editedBitmap));
+            using var stream = new FileStream(dlg.FileName, FileMode.Create, FileAccess.Write, FileShare.None);
+            encoder.Save(stream);
+            stream.Flush(true);
 
             StatusText.Text = $"Aetherlight • Exported • {IOPath.GetFileName(dlg.FileName)}";
             MessageBox.Show($"Export complete.\n\n{dlg.FileName}", "Aetherlight", MessageBoxButton.OK, MessageBoxImage.Information);

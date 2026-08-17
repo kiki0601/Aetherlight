@@ -26,7 +26,6 @@ public partial class MainWindow
     {
         if (_profileSupportReady) return;
         _profileSupportReady = true;
-        ProfileButton.Click += ProfileButton_Click;
         DevelopView.IsVisibleChanged += DevelopView_IsVisibleChanged;
 
         foreach (var slider in new[]
@@ -94,7 +93,6 @@ public partial class MainWindow
             new("Adobe Neutral", "Adobe Raw"),
             new("Adobe Monochrome", "Adobe Raw")
         };
-
         string make = _cameraName.ToLowerInvariant();
         if (make.Contains("canon") || make.Contains("nikon") || make.Contains("pentax") || make.Contains("leica") || make.Contains("sony") || make.Contains("fujifilm"))
         {

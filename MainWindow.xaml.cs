@@ -67,7 +67,7 @@ public partial class MainWindow : Window
 
     private void SetCurrentPhoto(BitmapSource source, string path)
     {
-        _currentPhotoPath = path; _originalSource = source; _healSpots.Clear(); _maskPoints.Clear(); ExitTool(); ResetAdjustments(); RefreshBasePixels(); ApplyAdjustments();
+        _currentPhotoPath = path; _originalSource = source; _healSpots.Clear(); _maskPoints.Clear(); ExitTool(); LoadAsShotWhiteBalance(path); ResetAdjustments(); RefreshBasePixels(); ApplyAdjustments();
         Preview.Source = _editedBitmap; Preview.Visibility = Visibility.Visible; EmptyHint.Visibility = Visibility.Collapsed; DevelopPreview.Source = _editedBitmap; DevelopEmpty.Visibility = Visibility.Collapsed;
         StatusText.Text = $"Aetherlight • {IOPath.GetFileName(path)} • {_pixelWidth} × {_pixelHeight}"; DrawHistogram();
     }
@@ -100,13 +100,13 @@ public partial class MainWindow : Window
     private void Adjustment_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (_loading || _originalPixels == null) return; UpdateValueLabels(); ApplyAdjustments(); }
     private void UpdateValueLabels()
     {
-        ExposureValue.Text = ExposureSlider.Value.ToString("+0.00;-0.00;0.00"); ContrastValue.Text = ContrastSlider.Value.ToString("+0;-0;0"); HighlightsValue.Text = HighlightsSlider.Value.ToString("+0;-0;0"); ShadowsValue.Text = ShadowsSlider.Value.ToString("+0;-0;0"); WhitesValue.Text = WhitesSlider.Value.ToString("+0;-0;0"); BlacksValue.Text = BlacksSlider.Value.ToString("+0;-0;0"); TemperatureValue.Text = TemperatureSlider.Value.ToString("+0;-0;0"); TintValue.Text = TintSlider.Value.ToString("+0;-0;0"); VibranceValue.Text = VibranceSlider.Value.ToString("+0;-0;0"); SaturationValue.Text = SaturationSlider.Value.ToString("+0;-0;0");
+        ExposureValue.Text = ExposureSlider.Value.ToString("+0.00;-0.00;0.00"); ContrastValue.Text = ContrastSlider.Value.ToString("+0;-0;0"); HighlightsValue.Text = HighlightsSlider.Value.ToString("+0;-0;0"); ShadowsValue.Text = ShadowsSlider.Value.ToString("+0;-0;0"); WhitesValue.Text = WhitesSlider.Value.ToString("+0;-0;0"); BlacksValue.Text = BlacksSlider.Value.ToString("+0;-0;0"); UpdateWhiteBalanceLabels(); VibranceValue.Text = VibranceSlider.Value.ToString("+0;-0;0"); SaturationValue.Text = SaturationSlider.Value.ToString("+0;-0;0");
     }
 
     private void ApplyAdjustments()
     {
         if (_originalPixels == null || _pixelWidth == 0) return;
-        byte[] pixels = new byte[_originalPixels.Length]; double exposure = Math.Pow(2, ExposureSlider.Value), contrast = (259.0 * (ContrastSlider.Value + 255.0)) / (255.0 * (259.0 - ContrastSlider.Value)); double saturation = 1 + SaturationSlider.Value / 100.0, vibrance = VibranceSlider.Value / 100.0, temperature = TemperatureSlider.Value / 100.0, tint = TintSlider.Value / 100.0; double highlights = HighlightsSlider.Value / 100.0, shadows = ShadowsSlider.Value / 100.0, whites = WhitesSlider.Value / 100.0, blacks = BlacksSlider.Value / 100.0; double maskRadius = MaskSizeSlider.Value;
+        byte[] pixels = new byte[_originalPixels.Length]; double exposure = Math.Pow(2, ExposureSlider.Value), contrast = (259.0 * (ContrastSlider.Value + 255.0)) / (255.0 * (259.0 - ContrastSlider.Value)); double saturation = 1 + SaturationSlider.Value / 100.0, vibrance = VibranceSlider.Value / 100.0, temperature = TemperatureSlider.Value / 10000.0, tint = TintSlider.Value / 100.0; double highlights = HighlightsSlider.Value / 100.0, shadows = ShadowsSlider.Value / 100.0, whites = WhitesSlider.Value / 100.0, blacks = BlacksSlider.Value / 100.0; double maskRadius = MaskSizeSlider.Value;
         for (int y = 0; y < _pixelHeight; y++) for (int x = 0; x < _pixelWidth; x++)
         {
             int i = (y * _pixelWidth + x) * 4, sx = x, sy = y;

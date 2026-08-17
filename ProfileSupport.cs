@@ -60,6 +60,7 @@ public partial class MainWindow
                 _cameraName = string.IsNullOrWhiteSpace(info.Model) ? info.Make : $"{info.Make} {info.Model}".Trim();
             }
             ProfileValue.Text = _selectedProfile;
+            ProfileButton.Content = _selectedProfile;
         }
         catch
         {
@@ -78,6 +79,7 @@ public partial class MainWindow
             _selectedProfile = dialog.SelectedProfile;
             ApplySelectedProfileOverlay();
             ProfileValue.Text = _selectedProfile;
+            ProfileButton.Content = _selectedProfile;
             StatusText.Text = $"Aetherlight • Profile • {_selectedProfile}";
         }
     }

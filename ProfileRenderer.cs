@@ -4,7 +4,7 @@ using System.Windows.Media.Imaging;
 
 namespace Aetherlight;
 
-internal sealed record ProfileDefinition(string Name, string Group);
+public sealed record ProfileDefinition(string Name, string Group);
 
 internal static class ProfileRenderer
 {
@@ -44,43 +44,18 @@ internal static class ProfileRenderer
         double luma = .2126 * r + .7152 * g + .0722 * b;
         switch (profile)
         {
-            case "Camera Standard":
-                Tone(ref r, ref g, ref b, 1.07, 1.04, 0.008, 0.0, 0.0);
-                break;
-            case "Camera Faithful":
-                Tone(ref r, ref g, ref b, 1.01, 0.98, 0.002, 0.0, 0.0);
-                break;
-            case "Camera Landscape":
-                Tone(ref r, ref g, ref b, 1.10, 1.15, 0.0, 0.018, 0.028);
-                break;
-            case "Camera Neutral":
-                Tone(ref r, ref g, ref b, 0.94, 0.92, -0.002, 0.0, 0.0);
-                break;
-            case "Camera Portrait":
-                Tone(ref r, ref g, ref b, 0.98, 0.96, 0.014, -0.006, -0.004);
-                break;
-            case "Camera Monochrome":
-                r = g = b = luma;
-                r = g = b = (r - .5) * 1.08 + .5;
-                break;
-            case "Adobe Color":
-                Tone(ref r, ref g, ref b, 1.06, 1.06, 0.008, 0.0, 0.004);
-                break;
-            case "Adobe Standard":
-                Tone(ref r, ref g, ref b, 1.02, 1.01, 0.0, 0.0, 0.0);
-                break;
-            case "Adobe Landscape":
-                Tone(ref r, ref g, ref b, 1.08, 1.12, 0.0, 0.015, 0.025);
-                break;
-            case "Adobe Portrait":
-                Tone(ref r, ref g, ref b, 0.98, 0.95, 0.012, -0.004, -0.003);
-                break;
-            case "Adobe Neutral":
-                Tone(ref r, ref g, ref b, 0.90, 0.90, 0.0, 0.0, 0.0);
-                break;
-            case "Adobe Monochrome":
-                r = g = b = (luma - .5) * 1.10 + .5;
-                break;
+            case "Camera Standard": Tone(ref r, ref g, ref b, 1.07, 1.04, 0.008, 0.0, 0.0); break;
+            case "Camera Faithful": Tone(ref r, ref g, ref b, 1.01, 0.98, 0.002, 0.0, 0.0); break;
+            case "Camera Landscape": Tone(ref r, ref g, ref b, 1.10, 1.15, 0.0, 0.018, 0.028); break;
+            case "Camera Neutral": Tone(ref r, ref g, ref b, 0.94, 0.92, -0.002, 0.0, 0.0); break;
+            case "Camera Portrait": Tone(ref r, ref g, ref b, 0.98, 0.96, 0.014, -0.006, -0.004); break;
+            case "Camera Monochrome": r = g = b = (luma - .5) * 1.08 + .5; break;
+            case "Adobe Color": Tone(ref r, ref g, ref b, 1.06, 1.06, 0.008, 0.0, 0.004); break;
+            case "Adobe Standard": Tone(ref r, ref g, ref b, 1.02, 1.01, 0.0, 0.0, 0.0); break;
+            case "Adobe Landscape": Tone(ref r, ref g, ref b, 1.08, 1.12, 0.0, 0.015, 0.025); break;
+            case "Adobe Portrait": Tone(ref r, ref g, ref b, 0.98, 0.95, 0.012, -0.004, -0.003); break;
+            case "Adobe Neutral": Tone(ref r, ref g, ref b, 0.90, 0.90, 0.0, 0.0, 0.0); break;
+            case "Adobe Monochrome": r = g = b = (luma - .5) * 1.10 + .5; break;
         }
     }
 

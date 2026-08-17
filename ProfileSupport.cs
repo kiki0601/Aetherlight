@@ -1,20 +1,26 @@
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Sdcb.LibRaw;
-using MetadataExtractor;
 
 namespace Aetherlight;
 
 public partial class MainWindow
 {
-    private double _baseKelvin = 6500;
-    private double _baseTint;
     private string _cameraName = "Camera";
     private string _selectedProfile = "Camera Standard";
     private bool _profileSupportReady;
     private bool _profileSliderCaptured;
+
+    static MainWindow()
+    {
+        EventManager.RegisterClassHandler(typeof(MainWindow), FrameworkElement.LoadedEvent, new RoutedEventHandler(ProfileSupportLoaded));
+    }
+
+    private static void ProfileSupportLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is MainWindow window) window.InitializeProfileSupport();
+    }
 
     private void InitializeProfileSupport()
     {
@@ -22,8 +28,6 @@ public partial class MainWindow
         _profileSupportReady = true;
         ProfileButton.Click += ProfileButton_Click;
         DevelopView.IsVisibleChanged += DevelopView_IsVisibleChanged;
-        TemperatureSlider.ValueChanged += WhiteBalanceSliderChanged;
-        TintSlider.ValueChanged += WhiteBalanceSliderChanged;
 
         foreach (var slider in new[]
         {
@@ -41,61 +45,27 @@ public partial class MainWindow
     private void DevelopView_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (DevelopView.Visibility == Visibility.Visible && !string.IsNullOrWhiteSpace(_currentPhotoPath))
-            LoadRawUiMetadata(_currentPhotoPath);
+            LoadCameraName(_currentPhotoPath);
     }
 
-    private void LoadRawUiMetadata(string path)
+    private void LoadCameraName(string path)
     {
         try
         {
-            _baseKelvin = 6500;
-            _baseTint = 0;
             _cameraName = "Camera";
-            var ext = IOPath.GetExtension(path).ToLowerInvariant();
+            string ext = IOPath.GetExtension(path).ToLowerInvariant();
             if (ext is ".cr3" or ".cr2" or ".arw" or ".raf" or ".dng" or ".nef" or ".nrw" or ".orf" or ".rw2" or ".pef" or ".srw")
             {
-                var wb = RawWhiteBalanceReader.Read(path);
-                _baseKelvin = wb.Kelvin;
-                _baseTint = wb.Tint;
                 using var raw = RawContext.OpenFile(path);
                 var info = raw.ImageParams;
                 _cameraName = string.IsNullOrWhiteSpace(info.Model) ? info.Make : $"{info.Make} {info.Model}".Trim();
             }
-            else
-            {
-                foreach (var tag in ImageMetadataReader.ReadMetadata(path).SelectMany(d => d.Tags))
-                {
-                    string n = tag.Name ?? "";
-                    if (n.Equals("Model", StringComparison.OrdinalIgnoreCase) || n.Equals("Camera Model Name", StringComparison.OrdinalIgnoreCase))
-                    {
-                        _cameraName = tag.Description ?? "Camera";
-                        break;
-                    }
-                }
-            }
+            ProfileValue.Text = _selectedProfile;
         }
         catch
         {
-            _baseKelvin = 6500;
-            _baseTint = 0;
             _cameraName = "Camera";
         }
-        UpdateWhiteBalanceLabels();
-        ProfileValue.Text = _selectedProfile;
-    }
-
-    private void WhiteBalanceSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (!_profileSupportReady || _loading) return;
-        UpdateWhiteBalanceLabels();
-    }
-
-    private void UpdateWhiteBalanceLabels()
-    {
-        if (TemperatureValue != null)
-            TemperatureValue.Text = $"{Math.Round(_baseKelvin + TemperatureSlider.Value * 20):0} K";
-        if (TintValue != null)
-            TintValue.Text = $"{Math.Round(_baseTint + TintSlider.Value):+0;-0;0}";
     }
 
     private void ProfileButton_Click(object sender, RoutedEventArgs e)
@@ -124,6 +94,7 @@ public partial class MainWindow
             new("Adobe Neutral", "Adobe Raw"),
             new("Adobe Monochrome", "Adobe Raw")
         };
+
         string make = _cameraName.ToLowerInvariant();
         if (make.Contains("canon") || make.Contains("nikon") || make.Contains("pentax") || make.Contains("leica") || make.Contains("sony") || make.Contains("fujifilm"))
         {

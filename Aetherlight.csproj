@@ -15,5 +15,6 @@
   <ItemGroup>
     <PackageReference Include="Sdcb.LibRaw" Version="0.21.1.7" />
     <PackageReference Include="Sdcb.LibRaw.runtime.win64" Version="0.21.1" />
+    <PackageReference Include="MetadataExtractor" Version="2.9.0" />
   </ItemGroup>
 </Project>

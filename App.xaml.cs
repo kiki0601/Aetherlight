@@ -1,3 +1,4 @@
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -15,12 +16,25 @@ public partial class App : Application
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         e.Handled = true;
-        MessageBox.Show($"Aetherlight encountered an error while starting or running.\n\n{e.Exception.GetType().Name}:\n{e.Exception.Message}\n\nDetails:\n{e.Exception.StackTrace}", "Aetherlight • Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        ShowException("Aetherlight • Startup/Runtime Error", e.Exception);
     }
 
     private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
-        if (e.ExceptionObject is Exception ex)
-            MessageBox.Show($"Aetherlight stopped unexpectedly.\n\n{ex.GetType().Name}:\n{ex.Message}\n\nDetails:\n{ex.StackTrace}", "Aetherlight • Fatal Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        if (e.ExceptionObject is Exception ex) ShowException("Aetherlight • Fatal Error", ex);
+    }
+
+    private static void ShowException(string title, Exception ex)
+    {
+        var sb = new StringBuilder();
+        int level = 0;
+        for (Exception? current = ex; current != null && level < 8; current = current.InnerException, level++)
+        {
+            sb.AppendLine($"[{level}] {current.GetType().FullName}");
+            sb.AppendLine(current.Message);
+            if (!string.IsNullOrWhiteSpace(current.StackTrace)) sb.AppendLine(current.StackTrace);
+            sb.AppendLine();
+        }
+        MessageBox.Show("Aetherlight could not start.\n\n" + sb, title, MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

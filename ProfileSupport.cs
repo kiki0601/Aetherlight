@@ -125,6 +125,7 @@ public partial class MainWindow
     private void ApplySelectedProfileOverlay()
     {
         if (_editedBitmap == null || _selectedProfile is "Camera Standard" or "Adobe Standard") return;
+        _renderVersion++;
         ApplyAdjustments();
         if (_editedBitmap == null) return;
 

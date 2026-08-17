@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Buffers.Binary;
 using System.IO;
+using System.Windows;
+using System.Windows.Controls.Primitives;
 using MetadataExtractor;
 
 namespace Aetherlight;
@@ -11,6 +13,43 @@ public partial class MainWindow
     private int _asShotTint = 0;
     private bool _whiteBalanceMetadataFound;
     private string _whiteBalanceLoadedPath = string.Empty;
+    private bool _whiteBalanceSliderHandling;
+
+    static MainWindow()
+    {
+        EventManager.RegisterClassHandler(typeof(MainWindow), RangeBase.ValueChangedEvent,
+            new RoutedPropertyChangedEventHandler<double>(HandleWhiteBalanceSliderValueChanged));
+    }
+
+    private static void HandleWhiteBalanceSliderValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (sender is not MainWindow window || window._loading || window._whiteBalanceSliderHandling || window._originalPixels == null)
+            return;
+
+        if (e.OriginalSource != window.TemperatureSlider)
+            return;
+
+        // The TemperatureSlider stores the real Kelvin value for the UI, but the
+        // existing renderer expects a relative adjustment. Intercept the routed
+        // event before Adjustment_ValueChanged, temporarily feed the renderer the
+        // delta from as-shot, then restore the real Kelvin value for the thumb.
+        e.Handled = true;
+        double actualKelvin = window.TemperatureSlider.Value;
+        double deltaKelvin = actualKelvin - window._asShotTemperature;
+
+        window._whiteBalanceSliderHandling = true;
+        try
+        {
+            window.TemperatureSlider.Value = deltaKelvin;
+            window.ApplyAdjustments();
+        }
+        finally
+        {
+            window.TemperatureSlider.Value = actualKelvin;
+            window._whiteBalanceSliderHandling = false;
+            window.UpdateWhiteBalanceLabels();
+        }
+    }
 
     private void LoadAsShotWhiteBalance(string path)
     {
@@ -21,28 +60,33 @@ public partial class MainWindow
 
         if (!string.IsNullOrWhiteSpace(path))
         {
-            // IMPORTANT: MetadataExtractor is the primary source. The previous
-            // implementation tried the hand-written CR3 scanner first, and that
-            // scanner could find an unrelated valid 6500K value elsewhere in the
-            // CR3 and stop before the real ColorTempAsShot tag was examined.
             bool metadataRead = TryReadGenericMetadata(path);
 
-            // Only use the binary Canon reader when the metadata library did not
-            // give us a reliable as-shot temperature.
             if (!metadataRead && path.EndsWith(".cr3", StringComparison.OrdinalIgnoreCase))
             {
                 if (TryReadCanonCr3WhiteBalance(path, out int cr3Temp, out int cr3Tint))
                 {
                     _asShotTemperature = RoundTemperatureForDisplay(cr3Temp);
-                    _asShotTint = cr3Tint;
+                    _asShotTint = Math.Clamp(cr3Tint, -150, 150);
                     _whiteBalanceMetadataFound = true;
                 }
             }
         }
 
         _loading = true;
-        TemperatureSlider.Value = 0;
-        TintSlider.Value = 0;
+        // RAW UI uses absolute Kelvin and absolute Adobe-style tint. The thumb
+        // therefore starts at the camera's as-shot value, not at zero.
+        TemperatureSlider.Minimum = 2000;
+        TemperatureSlider.Maximum = 50000;
+        TemperatureSlider.SmallChange = 100;
+        TemperatureSlider.LargeChange = 500;
+        TemperatureSlider.Value = Math.Clamp(_asShotTemperature, 2000, 50000);
+
+        TintSlider.Minimum = -150;
+        TintSlider.Maximum = 150;
+        TintSlider.SmallChange = 1;
+        TintSlider.LargeChange = 10;
+        TintSlider.Value = Math.Clamp(_asShotTint, -150, 150);
         _loading = false;
         UpdateWhiteBalanceLabels();
     }
@@ -65,8 +109,6 @@ public partial class MainWindow
                 string description = (tag.Description ?? string.Empty).Trim();
                 string normalized = NormalizeTagName(name);
 
-                // Canon CR3 can expose several temperature-related fields. We must
-                // rank them instead of taking the first one encountered.
                 int tempScore = GetTemperatureTagScore(normalized, name);
                 if (tempScore >= 0)
                 {
@@ -106,7 +148,6 @@ public partial class MainWindow
         }
         catch
         {
-            // Metadata is optional. RAW development must continue if it cannot be read.
             return false;
         }
     }
@@ -119,11 +160,8 @@ public partial class MainWindow
 
     private static int GetTemperatureTagScore(string normalized, string originalName)
     {
-        // Highest priority: the actual as-shot Canon field.
         if (normalized.Contains("ColorTempAsShot", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("ColorTemperatureAsShot", StringComparison.OrdinalIgnoreCase)) return 100;
-
-        // Other explicit Kelvin/as-shot fields are useful fallbacks.
         if (normalized.Contains("ColorTempKelvin", StringComparison.OrdinalIgnoreCase)) return 90;
         if (normalized.Contains("ColorTemperatureKelvin", StringComparison.OrdinalIgnoreCase)) return 90;
         if (normalized.Contains("ColorTempMeasured", StringComparison.OrdinalIgnoreCase)) return 70;
@@ -153,7 +191,6 @@ public partial class MainWindow
         {
             byte[] bytes = File.ReadAllBytes(path);
 
-            // Canon ColorData11. Accept both SHORT and UNDEFINED representations.
             if (TryReadCanonColorDataArray(bytes, 48, 109, out int temp48))
             {
                 temperature = temp48;
@@ -168,7 +205,6 @@ public partial class MainWindow
                 return true;
             }
 
-            // Last-resort payload scan, with strict WB coefficient validation.
             if (TryScanCanonColorData(bytes, out int scannedTemp))
             {
                 temperature = scannedTemp;
@@ -178,7 +214,6 @@ public partial class MainWindow
         }
         catch
         {
-            // Ignore optional RAW metadata errors.
         }
 
         return false;
@@ -236,7 +271,6 @@ public partial class MainWindow
         }
         catch
         {
-            // Fall through to the raw payload scan.
         }
         return false;
     }
@@ -292,13 +326,13 @@ public partial class MainWindow
     private static uint ReadU32(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, 4));
     private static bool IsKelvin(double? value) => value.HasValue && value.Value >= 1500 && value.Value <= 20000;
     private static bool IsKelvin(int value) => value >= 1500 && value <= 20000;
-    private static bool IsTint(double? value) => value.HasValue && value.Value >= -100 && value.Value <= 100;
-    private static bool IsTint(int value) => value >= -100 && value <= 100;
+    private static bool IsTint(double? value) => value.HasValue && value.Value >= -150 && value.Value <= 150;
+    private static bool IsTint(int value) => value >= -150 && value <= 150;
 
     private void UpdateWhiteBalanceLabels()
     {
-        int currentTemperature = _asShotTemperature + (int)Math.Round(TemperatureSlider.Value);
-        int currentTint = _asShotTint + (int)Math.Round(TintSlider.Value);
+        int currentTemperature = (int)Math.Round(TemperatureSlider.Value);
+        int currentTint = (int)Math.Round(TintSlider.Value);
         TemperatureValue.Text = $"{currentTemperature} K";
         TintValue.Text = currentTint.ToString("+0;-0;0", CultureInfo.InvariantCulture);
     }

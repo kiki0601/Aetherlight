@@ -1,5 +1,7 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Sdcb.LibRaw;
 
@@ -52,7 +54,7 @@ public partial class MainWindow
         try
         {
             _cameraName = "Camera";
-            string ext = IOPath.GetExtension(path).ToLowerInvariant();
+            string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext is ".cr3" or ".cr2" or ".arw" or ".raf" or ".dng" or ".nef" or ".nrw" or ".orf" or ".rw2" or ".pef" or ".srw")
             {
                 using var raw = RawContext.OpenFile(path);

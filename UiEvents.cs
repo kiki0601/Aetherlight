@@ -92,6 +92,11 @@ public partial class MainWindow
             _baseTemperatureKelvin = result.Kelvin;
             _baseTint = result.Tint;
             _loadedWhiteBalancePath = path;
+            _loading = true;
+            TemperatureSlider.Value = _baseTemperatureKelvin;
+            TintSlider.Value = 0;
+            _loading = false;
+            UpdateValueLabels();
             UpdateWhiteBalanceReadouts();
             StatusText.Text = $"Aetherlight • As-shot WB {_baseTemperatureKelvin:0} K • Tint {_baseTint:+0;-0;0}";
         }
@@ -106,7 +111,9 @@ public partial class MainWindow
 
     private void UpdateWhiteBalanceReadouts()
     {
-        TemperatureValue.Text = $"{_baseTemperatureKelvin + TemperatureSlider.Value:0} K";
+        // Temperature is an absolute Kelvin value. Tint is an adjustment around
+        // the camera's as-shot tint.
+        TemperatureValue.Text = $"{TemperatureSlider.Value:0} K";
         TintValue.Text = $"{_baseTint + TintSlider.Value:+0;-0;0}";
     }
 
@@ -130,7 +137,9 @@ public partial class MainWindow
 
         byte[] previewPixels = await Task.Run(() => RenderPixels(source, width, height, values, baseTemp, baseTint, 700));
         if (version != _renderVersion) return;
-        var preview = BitmapSource.Create(width > 700 ? 700 : width, Math.Max(1, (int)Math.Round(height * (Math.Min(700, width) / (double)width))), 96, 96, PixelFormats.Bgra32, null, previewPixels, Math.Min(700, width) * 4);
+        int outWidth = Math.Min(700, width);
+        int outHeight = Math.Max(1, (int)Math.Round(height * (outWidth / (double)width)));
+        var preview = BitmapSource.Create(outWidth, outHeight, 96, 96, PixelFormats.Bgra32, null, previewPixels, outWidth * 4);
         preview.Freeze();
         DevelopPreview.Source = preview;
         Preview.Source = preview;
@@ -154,7 +163,10 @@ public partial class MainWindow
         double exposure = Math.Pow(2, v[0]);
         double contrast = (259.0 * (v[1] + 255.0)) / (255.0 * (259.0 - v[1]));
         double saturation = 1 + v[9] / 100.0, vibrance = v[8] / 100.0;
-        double temperature = v[6] / 100.0, tint = v[7] / 100.0;
+        // Temperature is absolute Kelvin in the UI. Convert it to a relative
+        // delta from the camera's as-shot WB before applying the preview shift.
+        double temperature = (v[6] - baseTemp) / 100.0;
+        double tint = v[7] / 100.0;
         double highlights = v[2] / 100.0, shadows = v[3] / 100.0, whites = v[4] / 100.0, blacks = v[5] / 100.0;
         double scaleX = width / (double)outWidth, scaleY = height / (double)outHeight;
 

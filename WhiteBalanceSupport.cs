@@ -1,7 +1,5 @@
 using System.Globalization;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using MetadataExtractor;
 
 namespace Aetherlight;
@@ -14,56 +12,6 @@ public partial class MainWindow
     private int _asShotTint = 0;
     private bool _whiteBalanceMetadataFound;
     private string _whiteBalanceLoadedPath = string.Empty;
-    private bool _whiteBalanceSliderHandling;
-
-    private static readonly bool _whiteBalanceHandlerRegistered = RegisterWhiteBalanceHandler();
-
-    private static bool RegisterWhiteBalanceHandler()
-    {
-        EventManager.RegisterClassHandler(
-            typeof(MainWindow),
-            RangeBase.ValueChangedEvent,
-            new RoutedPropertyChangedEventHandler<double>(HandleAdjustmentSliderValueChanged));
-        return true;
-    }
-
-    private static void HandleAdjustmentSliderValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (sender is not MainWindow window || window._loading || window._whiteBalanceSliderHandling || window._originalPixels == null)
-            return;
-
-        if (e.OriginalSource is not Slider slider || !window.IsAdjustmentSlider(slider))
-            return;
-
-        e.Handled = true;
-        window._whiteBalanceSliderHandling = true;
-        try
-        {
-            double absoluteTemperature = window.TemperatureSlider.Value;
-            double temperatureDelta = absoluteTemperature - window._asShotTemperature;
-
-            window.TemperatureSlider.Value = temperatureDelta;
-            window.ApplyAdjustments();
-            window.TemperatureSlider.Value = absoluteTemperature;
-            window.UpdateValueLabels();
-        }
-        finally
-        {
-            window._whiteBalanceSliderHandling = false;
-        }
-    }
-
-    private bool IsAdjustmentSlider(Slider slider) =>
-        ReferenceEquals(slider, ExposureSlider) ||
-        ReferenceEquals(slider, ContrastSlider) ||
-        ReferenceEquals(slider, HighlightsSlider) ||
-        ReferenceEquals(slider, ShadowsSlider) ||
-        ReferenceEquals(slider, WhitesSlider) ||
-        ReferenceEquals(slider, BlacksSlider) ||
-        ReferenceEquals(slider, TemperatureSlider) ||
-        ReferenceEquals(slider, TintSlider) ||
-        ReferenceEquals(slider, VibranceSlider) ||
-        ReferenceEquals(slider, SaturationSlider);
 
     private void LoadAsShotWhiteBalance(string path)
     {
@@ -79,7 +27,7 @@ public partial class MainWindow
         TemperatureSlider.Value = Math.Clamp(_asShotTemperature, (int)MinKelvin, (int)MaxKelvin);
         TintSlider.Value = 0;
         _loading = false;
-        UpdateWhiteBalanceLabels();
+        UpdateValueLabels();
     }
 
     private bool TryReadGenericMetadata(string path)
@@ -87,10 +35,13 @@ public partial class MainWindow
         try
         {
             var directories = ImageMetadataReader.ReadMetadata(path);
-            double? temperature = null;
+            double? asShotKelvin = null;
+            double? manualKelvin = null;
             double? tint = null;
-            int temperatureScore = -1;
+            int asShotScore = -1;
+            int manualScore = -1;
             int tintScore = -1;
+            bool canonRaw = false;
 
             foreach (var directory in directories)
             foreach (var tag in directory.Tags)
@@ -98,15 +49,37 @@ public partial class MainWindow
                 string name = tag.Name.Trim();
                 string description = (tag.Description ?? string.Empty).Trim();
                 string normalized = NormalizeTagName(name);
+                string directoryName = directory.Name ?? string.Empty;
 
-                int tempScore = GetTemperatureTagScore(normalized, name);
-                if (tempScore >= 0)
+                if (directoryName.Contains("Canon", StringComparison.OrdinalIgnoreCase) ||
+                    normalized.Contains("WB_RGGB", StringComparison.OrdinalIgnoreCase) ||
+                    normalized.Contains("ColorTemp", StringComparison.OrdinalIgnoreCase))
+                    canonRaw = true;
+
+                // Canon ColorData11 (EOS R6 Mark II/R7/R10/R50) contains both
+                // ColorTempAsShot and ColorTempKelvin. For manual Kelvin WB,
+                // ColorTempKelvin is the actual camera setting and is the value
+                // Lightroom-style RAW controls should start from. ColorTempAsShot
+                // can represent a different Canon-derived informational value.
+                int manualScoreCandidate = GetManualTemperatureTagScore(normalized, name);
+                if (manualScoreCandidate >= 0)
                 {
                     double? value = ExtractFirstNumber(description);
-                    if (IsKelvin(value) && tempScore > temperatureScore)
+                    if (IsKelvin(value) && manualScoreCandidate > manualScore)
                     {
-                        temperature = value;
-                        temperatureScore = tempScore;
+                        manualKelvin = value;
+                        manualScore = manualScoreCandidate;
+                    }
+                }
+
+                int asShotScoreCandidate = GetAsShotTemperatureTagScore(normalized, name);
+                if (asShotScoreCandidate >= 0)
+                {
+                    double? value = ExtractFirstNumber(description);
+                    if (IsKelvin(value) && asShotScoreCandidate > asShotScore)
+                    {
+                        asShotKelvin = value;
+                        asShotScore = asShotScoreCandidate;
                     }
                 }
 
@@ -122,9 +95,13 @@ public partial class MainWindow
                 }
             }
 
-            if (temperature.HasValue)
+            // Prefer Canon's explicit Kelvin WB entry whenever present. This is
+            // the important distinction for CR3 files shot using the camera's
+            // Manual Temperature (Kelvin) WB mode.
+            double? chosenTemperature = manualKelvin ?? asShotKelvin;
+            if (chosenTemperature.HasValue)
             {
-                _asShotTemperature = RoundTemperatureForDisplay((int)Math.Round(temperature.Value));
+                _asShotTemperature = RoundTemperatureForDisplay((int)Math.Round(chosenTemperature.Value));
                 _whiteBalanceMetadataFound = true;
             }
 
@@ -134,7 +111,7 @@ public partial class MainWindow
                 _whiteBalanceMetadataFound = true;
             }
 
-            return temperature.HasValue;
+            return chosenTemperature.HasValue;
         }
         catch
         {
@@ -148,12 +125,20 @@ public partial class MainWindow
             .Replace("-", string.Empty)
             .Replace("/", string.Empty);
 
-    private static int GetTemperatureTagScore(string normalized, string originalName)
+    private static int GetManualTemperatureTagScore(string normalized, string originalName)
+    {
+        // Highest priority: Canon ColorData11's Kelvin entry.
+        if (normalized.Contains("ColorTempKelvin", StringComparison.OrdinalIgnoreCase)) return 120;
+        if (normalized.Contains("ColorTemperatureKelvin", StringComparison.OrdinalIgnoreCase)) return 120;
+        if (normalized.Contains("ColorTempCustom", StringComparison.OrdinalIgnoreCase)) return 110;
+        if (normalized.Contains("ColorTemperatureCustom", StringComparison.OrdinalIgnoreCase)) return 110;
+        return -1;
+    }
+
+    private static int GetAsShotTemperatureTagScore(string normalized, string originalName)
     {
         if (normalized.Contains("ColorTempAsShot", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("ColorTemperatureAsShot", StringComparison.OrdinalIgnoreCase)) return 100;
-        if (normalized.Contains("ColorTempKelvin", StringComparison.OrdinalIgnoreCase)) return 90;
-        if (normalized.Contains("ColorTemperatureKelvin", StringComparison.OrdinalIgnoreCase)) return 90;
         if (normalized.Contains("ColorTempMeasured", StringComparison.OrdinalIgnoreCase)) return 70;
         if (normalized.Equals("ColorTemperature", StringComparison.OrdinalIgnoreCase)) return 60;
         if (originalName.Contains("Color Temperature", StringComparison.OrdinalIgnoreCase)) return 50;
@@ -181,12 +166,6 @@ public partial class MainWindow
         int currentTint = _asShotTint + (int)Math.Round(TintSlider.Value);
         TemperatureValue.Text = $"{currentTemperature} K";
         TintValue.Text = currentTint.ToString("+0;-0;0", CultureInfo.InvariantCulture);
-    }
-
-    private static double SliderPositionToKelvin(double position)
-    {
-        double t = Math.Clamp(position, 0.0, 1.0);
-        return MinKelvin * Math.Pow(MaxKelvin / MinKelvin, t);
     }
 
     private static double? ExtractFirstNumber(string text)

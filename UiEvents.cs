@@ -148,7 +148,6 @@ public partial class MainWindow
         var cts = new CancellationTokenSource();
         _renderCancellation = cts;
         int version = Interlocked.Increment(ref _renderVersion);
-
         _ = RenderScheduledAsync(version, cts.Token, immediate);
     }
 
@@ -176,29 +175,38 @@ public partial class MainWindow
                 return;
             }
 
-            // Interactive render deliberately targets a small image. This keeps
-            // slider movement responsive even on large CR3/ARW/RAF files.
-            byte[] previewPixels = await Task.Run(() => RenderPixels(source, width, height, values, baseTemp, baseTint, 900, token), token);
+            int previewWidth = Math.Min(900, width);
+            byte[] previewPixels;
+            bool gpuRendered = await Task.Run(() => GpuPreviewRenderer.TryRender(source, width, height, values, baseTemp, baseTint, previewWidth, token, out previewPixels, out _, out _), token);
+
             token.ThrowIfCancellationRequested();
             if (version != _renderVersion) return;
 
-            BitmapSource preview = CreateBitmap(previewPixels, Math.Min(900, width), height, width);
+            if (!gpuRendered)
+                previewPixels = await Task.Run(() => RenderPixels(source, width, height, values, baseTemp, baseTint, previewWidth, token), token);
+
+            token.ThrowIfCancellationRequested();
+            if (version != _renderVersion) return;
+
+            int previewHeight = Math.Max(1, (int)Math.Round(height * (previewWidth / (double)width)));
+            BitmapSource preview = BitmapSource.Create(previewWidth, previewHeight, 96, 96, PixelFormats.Bgra32, null, previewPixels, previewWidth * 4);
             preview.Freeze();
             AddPreviewCache(key, preview);
             DevelopPreview.Source = preview;
             Preview.Source = preview;
 
-            // Full resolution is intentionally delayed. If the user moves the
-            // slider again, this work is cancelled before it can hit the UI.
             await Task.Delay(180, token);
             token.ThrowIfCancellationRequested();
             if (version != _renderVersion) return;
 
+            // Keep the final render off the UI thread. The interactive GPU pass
+            // is what makes slider movement responsive; this pass preserves the
+            // full-resolution result used for export and the histogram.
             byte[] fullPixels = await Task.Run(() => RenderPixels(source, width, height, values, baseTemp, baseTint, 0, token), token);
             token.ThrowIfCancellationRequested();
             if (version != _renderVersion) return;
 
-            BitmapSource full = CreateBitmap(fullPixels, width, height, width);
+            BitmapSource full = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, fullPixels, width * 4);
             full.Freeze();
             DevelopPreview.Source = full;
             Preview.Source = full;
@@ -206,11 +214,11 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
-            // Expected when the user moves a slider again.
+            // Expected whenever a newer slider value supersedes this render.
         }
         catch
         {
-            // A preview failure must never take down the editor.
+            // Preview failures must never take down the editor.
         }
     }
 
@@ -221,12 +229,6 @@ public partial class MainWindow
         TemperatureSlider.Value, TintSlider.Value, VibranceSlider.Value,
         SaturationSlider.Value
     };
-
-    private static BitmapSource CreateBitmap(byte[] pixels, int width, int sourceHeight, int sourceWidth)
-    {
-        int height = Math.Max(1, (int)Math.Round(sourceHeight * (width / (double)sourceWidth)));
-        return BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
-    }
 
     private void AddPreviewCache(RenderCacheKey key, BitmapSource image)
     {
@@ -286,8 +288,6 @@ public partial class MainWindow
                 double tonal = shadows * shadowMask * .35 + highlights * highlightMask * -.25 + whites * whiteMask * .25 + blacks * blackMask * -.25;
                 r += tonal; g += tonal; b += tonal;
 
-                // Kelvin is absolute in the UI. The preview applies only the
-                // delta from the camera's as-shot temperature.
                 r += temperature * .10;
                 b -= temperature * .10;
                 r += tint * .03;

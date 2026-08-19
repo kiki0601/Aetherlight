@@ -9,14 +9,13 @@ using System.Windows.Threading;
 namespace Aetherlight;
 
 /// <summary>
-/// Runtime UI repair layer. It deliberately lives outside the large XAML file so
-/// the editor controls can be repaired without disturbing the RAW pipeline.
+/// Stable runtime UI layer for precise controls, masks and canvas navigation.
+/// Keeping this separate from the XAML avoids fragile startup-time tree surgery.
 /// </summary>
 internal static class FunctionalUiFixes
 {
     private static readonly Dictionary<Slider, TextBox> ValueBoxes = new();
     private static readonly Dictionary<TextBox, Slider> BoxSliders = new();
-    private static readonly Dictionary<TextBox, string> BoxKinds = new();
     private static bool _registered;
 
     [ModuleInitializer]
@@ -25,50 +24,49 @@ internal static class FunctionalUiFixes
         if (_registered) return;
         _registered = true;
 
-        EventManager.RegisterClassHandler(
-            typeof(MainWindow),
-            FrameworkElement.LoadedEvent,
-            new RoutedEventHandler(OnWindowLoaded),
-            true);
-
-        EventManager.RegisterClassHandler(
-            typeof(Image),
-            UIElement.MouseLeftButtonUpEvent,
-            new MouseButtonEventHandler(OnPreviewMouseUp),
-            true);
-
-        EventManager.RegisterClassHandler(
-            typeof(Image),
-            UIElement.MouseWheelEvent,
-            new MouseWheelEventHandler(OnPreviewWheel),
-            true);
+        EventManager.RegisterClassHandler(typeof(MainWindow), FrameworkElement.LoadedEvent,
+            new RoutedEventHandler(OnWindowLoaded), true);
+        EventManager.RegisterClassHandler(typeof(Image), UIElement.MouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(OnPreviewMouseDown), true);
+        EventManager.RegisterClassHandler(typeof(Image), UIElement.MouseMoveEvent,
+            new MouseEventHandler(OnPreviewMouseMove), true);
+        EventManager.RegisterClassHandler(typeof(Image), UIElement.MouseLeftButtonUpEvent,
+            new MouseButtonEventHandler(OnPreviewMouseUp), true);
+        EventManager.RegisterClassHandler(typeof(Image), UIElement.MouseWheelEvent,
+            new MouseWheelEventHandler(OnPreviewWheel), true);
     }
 
     private static void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not MainWindow window) return;
-
         if (window.DevelopView != null)
+        {
             window.DevelopView.IsVisibleChanged -= DevelopView_IsVisibleChanged;
-        if (window.DevelopView != null)
             window.DevelopView.IsVisibleChanged += DevelopView_IsVisibleChanged;
-
+        }
         window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => Repair(window)));
-        window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => Repair(window)));
+        window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => Repair(window)));
     }
 
     private static void DevelopView_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (sender is not Grid view || !view.IsVisible || Window.GetWindow(view) is not MainWindow window) return;
-        window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => Repair(window)));
+        if (sender is Grid view && view.IsVisible && Window.GetWindow(view) is MainWindow window)
+            window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => Repair(window)));
     }
 
     private static void Repair(MainWindow window)
     {
-        AddNumericControls(window);
-        AddColorGradingReadout(window);
-        RepairZoomViewport(window);
-        SyncOverlayTransform(window);
+        try
+        {
+            AddNumericControls(window);
+            AddColorGradingReadout(window);
+            RepairZoomViewport(window);
+            SyncOverlayTransform(window);
+        }
+        catch
+        {
+            // UI repair must never prevent the main editor/render pipeline from starting.
+        }
     }
 
     private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
@@ -86,22 +84,15 @@ internal static class FunctionalUiFixes
     {
         foreach (Slider slider in FindVisualChildren<Slider>(window).ToList())
         {
-            if (ValueBoxes.ContainsKey(slider)) continue;
-            if (slider.Name is null || slider.Name.Length == 0) continue;
-
-            // Basic already has deliberately styled value boxes in XAML.
+            if (ValueBoxes.ContainsKey(slider) || string.IsNullOrWhiteSpace(slider.Name)) continue;
             if (IsBasicSlider(slider)) continue;
 
-            // A previous repair pass may already have placed a value box beside this slider.
-            if (HasValueBoxNearSlider(slider))
+            TextBox? existing = FindValueBoxNearSlider(slider);
+            if (existing != null)
             {
-                TextBox? existing = FindValueBoxNearSlider(slider);
-                if (existing != null)
-                {
-                    ValueBoxes[slider] = existing;
-                    BoxSliders[existing] = slider;
-                    existing.Text = Format(slider);
-                }
+                ValueBoxes[slider] = existing;
+                BoxSliders[existing] = slider;
+                existing.Text = Format(slider);
                 continue;
             }
 
@@ -127,37 +118,29 @@ internal static class FunctionalUiFixes
             box.KeyDown += ValueBox_KeyDown;
             box.LostFocus += ValueBox_LostFocus;
             slider.ValueChanged += Slider_ValueChanged;
-
             ValueBoxes[slider] = box;
             BoxSliders[box] = slider;
-
             PlaceValueBox(slider, box);
         }
     }
 
-    private static bool IsBasicSlider(Slider slider)
-    {
-        return slider.Name is "ExposureSlider" or "ContrastSlider" or "HighlightsSlider" or
-            "ShadowsSlider" or "WhitesSlider" or "BlacksSlider" or "TemperatureSlider" or
-            "TintSlider" or "VibranceSlider" or "SaturationSlider";
-    }
-
-    private static bool HasValueBoxNearSlider(Slider slider) => FindValueBoxNearSlider(slider) != null;
+    private static bool IsBasicSlider(Slider slider) => slider.Name is
+        "ExposureSlider" or "ContrastSlider" or "HighlightsSlider" or "ShadowsSlider" or
+        "WhitesSlider" or "BlacksSlider" or "TemperatureSlider" or "TintSlider" or
+        "VibranceSlider" or "SaturationSlider";
 
     private static TextBox? FindValueBoxNearSlider(Slider slider)
     {
-        if (slider.Parent is Panel panel)
+        if (slider.Parent is not Panel panel) return null;
+        foreach (FrameworkElement child in panel.Children.OfType<FrameworkElement>())
         {
-            foreach (FrameworkElement child in panel.Children.OfType<FrameworkElement>())
+            if (child is TextBox tb && string.Equals(tb.Tag?.ToString(), slider.Name, StringComparison.OrdinalIgnoreCase))
+                return tb;
+            if (child is Grid grid)
             {
-                if (child is TextBox tb && string.Equals(tb.Tag?.ToString(), slider.Name, StringComparison.OrdinalIgnoreCase))
-                    return tb;
-                if (child is Grid grid)
-                {
-                    TextBox? box = grid.Children.OfType<TextBox>().FirstOrDefault(tb =>
-                        string.Equals(tb.Tag?.ToString(), slider.Name, StringComparison.OrdinalIgnoreCase));
-                    if (box != null) return box;
-                }
+                TextBox? box = grid.Children.OfType<TextBox>().FirstOrDefault(tb =>
+                    string.Equals(tb.Tag?.ToString(), slider.Name, StringComparison.OrdinalIgnoreCase));
+                if (box != null) return box;
             }
         }
         return null;
@@ -167,10 +150,8 @@ internal static class FunctionalUiFixes
     {
         if (slider.Parent is Grid grid)
         {
-            if (grid.ColumnDefinitions.Count == 0)
-                grid.ColumnDefinitions.Add(new ColumnDefinition());
-            if (grid.ColumnDefinitions.Count == 1)
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            if (grid.ColumnDefinitions.Count == 0) grid.ColumnDefinitions.Add(new ColumnDefinition());
+            if (grid.ColumnDefinitions.Count == 1) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             Grid.SetColumn(slider, 0);
             Grid.SetColumn(box, 1);
             grid.Children.Add(box);
@@ -181,7 +162,6 @@ internal static class FunctionalUiFixes
         {
             int index = panel.Children.IndexOf(slider);
             panel.Children.RemoveAt(index);
-
             var wrapper = new Grid { Margin = slider.Margin };
             wrapper.ColumnDefinitions.Add(new ColumnDefinition());
             wrapper.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -197,15 +177,10 @@ internal static class FunctionalUiFixes
     private static string Format(Slider slider)
     {
         double value = slider.Value;
-        string name = slider.Name;
-        if (name.Contains("Temperature", StringComparison.OrdinalIgnoreCase))
-            return $"{Math.Round(value):0} K";
-        if (name.Contains("Exposure", StringComparison.OrdinalIgnoreCase))
-            return value.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
-        if (name.Contains("Angle", StringComparison.OrdinalIgnoreCase))
-            return value.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + "°";
-        if (Math.Abs(value - Math.Round(value)) < 0.0001)
-            return value.ToString("+0;-0;0", CultureInfo.InvariantCulture);
+        if (slider.Name.Contains("Temperature", StringComparison.OrdinalIgnoreCase)) return $"{Math.Round(value):0} K";
+        if (slider.Name.Contains("Exposure", StringComparison.OrdinalIgnoreCase)) return value.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
+        if (slider.Name.Contains("Angle", StringComparison.OrdinalIgnoreCase)) return value.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + "°";
+        if (Math.Abs(value - Math.Round(value)) < .0001) return value.ToString("+0;-0;0", CultureInfo.InvariantCulture);
         return value.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture);
     }
 
@@ -219,37 +194,30 @@ internal static class FunctionalUiFixes
 
     private static void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (sender is Slider slider && ValueBoxes.TryGetValue(slider, out TextBox? box))
-            box.Text = Format(slider);
+        if (sender is Slider slider && ValueBoxes.TryGetValue(slider, out TextBox? box)) box.Text = Format(slider);
     }
 
     private static void ValueBox_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is TextBox box)
-            box.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(box.SelectAll));
+        if (sender is TextBox box) box.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(box.SelectAll));
     }
 
     private static void ValueBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (sender is not TextBox box || !BoxSliders.TryGetValue(box, out Slider? slider)) return;
-
         if (e.Key == Key.Enter)
         {
             Commit(box, slider);
-            box.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
             e.Handled = true;
-            return;
         }
-        if (e.Key == Key.Escape)
+        else if (e.Key == Key.Escape)
         {
             box.Text = Format(slider);
             e.Handled = true;
-            return;
         }
-        if (e.Key is Key.Up or Key.Down)
+        else if (e.Key is Key.Up or Key.Down)
         {
-            double step = Step(slider);
-            slider.Value = Math.Clamp(slider.Value + (e.Key == Key.Up ? step : -step), slider.Minimum, slider.Maximum);
+            slider.Value = Math.Clamp(slider.Value + (e.Key == Key.Up ? Step(slider) : -Step(slider)), slider.Minimum, slider.Maximum);
             box.Text = Format(slider);
             box.SelectAll();
             e.Handled = true;
@@ -258,36 +226,27 @@ internal static class FunctionalUiFixes
 
     private static void ValueBox_LostFocus(object sender, RoutedEventArgs e)
     {
-        if (sender is TextBox box && BoxSliders.TryGetValue(box, out Slider? slider))
-            Commit(box, slider);
+        if (sender is TextBox box && BoxSliders.TryGetValue(box, out Slider? slider)) Commit(box, slider);
     }
 
     private static void Commit(TextBox box, Slider slider)
     {
-        string raw = box.Text.Replace("K", string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Replace("°", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
-        if (double.TryParse(raw, NumberStyles.Float | NumberStyles.AllowLeadingSign,
-            CultureInfo.InvariantCulture, out double value))
+        string raw = box.Text.Replace("K", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("°", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        if (double.TryParse(raw, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out double value))
             slider.Value = Math.Clamp(value, slider.Minimum, slider.Maximum);
         box.Text = Format(slider);
     }
 
     private static void AddColorGradingReadout(MainWindow window)
     {
-        Canvas? wheel = FindVisualChildren<Canvas>(window)
-            .FirstOrDefault(c => c.Name.Contains("ColorWheel", StringComparison.OrdinalIgnoreCase));
+        Canvas? wheel = FindVisualChildren<Canvas>(window).FirstOrDefault(c => c.Name.Contains("ColorWheel", StringComparison.OrdinalIgnoreCase));
         if (wheel?.Parent is not Panel panel) return;
         if (panel.Children.OfType<FrameworkElement>().Any(x => x.Tag?.ToString() == "AetherlightGradeReadout")) return;
 
-        var readout = new StackPanel
-        {
-            Tag = "AetherlightGradeReadout",
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 5, 0, 4)
-        };
-        readout.Children.Add(MakeGradeBox("H", "Hue"));
-        readout.Children.Add(MakeGradeBox("S", "Saturation"));
-        readout.Children.Add(MakeGradeBox("L", "Luma"));
+        var readout = new StackPanel { Tag = "AetherlightGradeReadout", Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 4) };
+        readout.Children.Add(MakeGradeBox("H", "Hue in degrees"));
+        readout.Children.Add(MakeGradeBox("S", "Saturation 0-1"));
+        readout.Children.Add(MakeGradeBox("L", "Luma -1 to +1"));
         int index = panel.Children.IndexOf(wheel);
         panel.Children.Insert(Math.Min(index + 1, panel.Children.Count), readout);
     }
@@ -296,16 +255,10 @@ internal static class FunctionalUiFixes
     {
         var box = new TextBox
         {
-            Width = 58,
-            Height = 22,
-            Margin = new Thickness(3, 0, 3, 0),
-            Text = "0",
-            Foreground = Brushes.Gainsboro,
-            Background = new SolidColorBrush(Color.FromRgb(25, 25, 25)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-            HorizontalContentAlignment = HorizontalAlignment.Right,
-            Tag = "Grade:" + label,
-            ToolTip = tooltip
+            Width = 62, Height = 22, Margin = new Thickness(3, 0, 3, 0), Text = "0",
+            Foreground = Brushes.Gainsboro, Background = new SolidColorBrush(Color.FromRgb(25, 25, 25)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)), HorizontalContentAlignment = HorizontalAlignment.Right,
+            Tag = "Grade:" + label, ToolTip = tooltip
         };
         box.PreviewMouseLeftButtonDown += (_, _) => box.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(box.SelectAll));
         box.KeyDown += GradeBox_KeyDown;
@@ -314,12 +267,10 @@ internal static class FunctionalUiFixes
 
     private static void GradeBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (sender is not TextBox box || box.Tag is not string tag || !tag.StartsWith("Grade:", StringComparison.Ordinal)) return;
-        if (e.Key != Key.Enter) return;
+        if (sender is not TextBox box || box.Tag is not string tag || !tag.StartsWith("Grade:", StringComparison.Ordinal) || e.Key != Key.Enter) return;
         if (!double.TryParse(box.Text, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out double value)) return;
-        string kind = tag.Substring("Grade:".Length);
-        var window = Window.GetWindow(box) as MainWindow;
-        if (window == null) return;
+        if (Window.GetWindow(box) is not MainWindow window) return;
+        string kind = tag.Substring(6);
         if (kind == "H") window._gradeHue = value;
         else if (kind == "S") window._gradeSat = Math.Clamp(value, 0, 1);
         else window._gradeLuma = Math.Clamp(value, -1, 1);
@@ -332,13 +283,11 @@ internal static class FunctionalUiFixes
     {
         if (window.DevelopPreview == null) return;
         window.DevelopPreview.RenderTransformOrigin = new Point(.5, .5);
-
         DependencyObject? current = window.DevelopPreview;
-        for (int i = 0; i < 4 && current != null; i++)
+        for (int i = 0; i < 5 && current != null; i++)
         {
             current = VisualTreeHelper.GetParent(current);
-            if (current is FrameworkElement element)
-                element.ClipToBounds = true;
+            if (current is FrameworkElement element) element.ClipToBounds = true;
         }
     }
 
@@ -346,11 +295,65 @@ internal static class FunctionalUiFixes
     {
         if (sender is not Image image || image.Name != "DevelopPreview") return;
         if (Window.GetWindow(image) is not MainWindow window) return;
+        window.ChangeCanvasZoom(e.Delta > 0 ? 1.15 : 1.0 / 1.15);
         window.Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
         {
             SyncOverlayTransform(window);
             RepairZoomViewport(window);
         }));
+        e.Handled = true;
+    }
+
+    private static void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Image image || image.Name != "DevelopPreview") return;
+        if (Window.GetWindow(image) is not MainWindow window) return;
+
+        if (e.ChangedButton == MouseButton.Middle)
+        {
+            window._panningCanvas = true;
+            window._panStartMouse = e.GetPosition(image);
+            window._panStartOffset = window._canvasPan;
+            image.CaptureMouse();
+            e.Handled = true;
+        }
+    }
+
+    private static void OnPreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is not Image image || image.Name != "DevelopPreview") return;
+        if (Window.GetWindow(image) is not MainWindow window) return;
+        if (window._panningCanvas && e.MiddleButton == MouseButtonState.Pressed)
+        {
+            Point now = e.GetPosition(image);
+            window._canvasPan = window._panStartOffset + (now - window._panStartMouse);
+            window.ApplyCanvasTransform();
+            SyncOverlayTransform(window);
+            e.Handled = true;
+        }
+    }
+
+    private static void OnPreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Image image || image.Name != "DevelopPreview") return;
+        if (Window.GetWindow(image) is not MainWindow window) return;
+
+        if (e.ChangedButton == MouseButton.Middle && window._panningCanvas)
+        {
+            window._panningCanvas = false;
+            image.ReleaseMouseCapture();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ChangedButton == MouseButton.Left && window._toolMode == ToolMode.Mask)
+        {
+            window.Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+            {
+                window.StartFastRender();
+                SyncOverlayTransform(window);
+            }));
+        }
     }
 
     private static void SyncOverlayTransform(MainWindow window)
@@ -361,21 +364,5 @@ internal static class FunctionalUiFixes
         group.Children.Add(new TranslateTransform(window._canvasPan.X, window._canvasPan.Y));
         window.OverlayCanvas.RenderTransformOrigin = new Point(.5, .5);
         window.OverlayCanvas.RenderTransform = group;
-    }
-
-    private static void OnPreviewMouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not Image image || image.Name != "DevelopPreview") return;
-        if (e.ChangedButton != MouseButton.Left) return;
-        if (Window.GetWindow(image) is not MainWindow window) return;
-        if (window._toolMode != ToolMode.Mask) return;
-
-        // The interactive mask code records the geometry; force the advanced
-        // preview renderer to consume it immediately instead of the legacy renderer.
-        window.Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
-        {
-            window.StartFastRender();
-            SyncOverlayTransform(window);
-        }));
     }
 }

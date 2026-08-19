@@ -222,8 +222,12 @@ public partial class MainWindow
         double contrast = (259.0 * (v[1] + 255.0)) / (255.0 * (259.0 - v[1]));
         double saturation = 1 + v[9] / 100.0;
         double vibrance = v[8] / 100.0;
-        double temperature = (v[6] - baseTemp) / 100.0;
-        double tint = (v[7] + baseTint) / 100.0;
+        // Temperature is an absolute Kelvin value. Use a logarithmic chromatic
+        // adjustment so 1 K is genuinely tiny while large changes remain useful.
+        double temperature = Math.Log(Math.Max(1000.0, v[6]) / Math.Max(1000.0, baseTemp)) * 0.55;
+        // The decoded image is already at the camera's as-shot tint, so only the
+        // user's slider delta should be applied. Do not add the metadata tint again.
+        double tint = v[7] / 100.0;
         double highlights = v[2] / 100.0, shadows = v[3] / 100.0, whites = v[4] / 100.0, blacks = v[5] / 100.0;
         double scaleX = width / (double)outWidth, scaleY = height / (double)outHeight;
 

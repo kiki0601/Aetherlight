@@ -3,7 +3,8 @@ using System.Threading;
 
 namespace Aetherlight;
 
-internal static class GpuPreviewRenderer
+// Partial because ComputeSharp may emit companion declarations during source generation.
+internal static partial class GpuPreviewRenderer
 {
     private static GraphicsDevice? _device;
     private static readonly object Gate = new();
@@ -111,8 +112,6 @@ internal static class GpuPreviewRenderer
         return packed;
     }
 
-    // Public accessibility is required because ComputeSharp generates a public
-    // shader descriptor for this type.
     [ThreadGroupSize(DefaultThreadGroupSizes.X)]
     [GeneratedComputeShaderDescriptor]
     public readonly partial struct DevelopPreviewShader(

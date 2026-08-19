@@ -14,16 +14,6 @@ public partial class MainWindow
     private bool _profileSupportReady;
     private bool _profileSliderCaptured;
 
-    static MainWindow()
-    {
-        EventManager.RegisterClassHandler(typeof(MainWindow), FrameworkElement.LoadedEvent, new RoutedEventHandler(ProfileSupportLoaded));
-    }
-
-    private static void ProfileSupportLoaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is MainWindow window) window.InitializeProfileSupport();
-    }
-
     private void InitializeProfileSupport()
     {
         if (_profileSupportReady) return;

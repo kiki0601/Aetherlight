@@ -3,7 +3,6 @@ using System.Threading;
 
 namespace Aetherlight;
 
-// Partial because ComputeSharp may emit companion declarations during source generation.
 internal static partial class GpuPreviewRenderer
 {
     private static GraphicsDevice? _device;
@@ -32,7 +31,6 @@ internal static partial class GpuPreviewRenderer
             token.ThrowIfCancellationRequested();
             width = Math.Min(maxWidth, sourceWidth);
             height = Math.Max(1, (int)Math.Round(sourceHeight * (width / (double)sourceWidth)));
-
             uint[] packed = DownsampleAndPack(source, sourceWidth, sourceHeight, width, height, token);
             uint[] result = new uint[packed.Length];
 
@@ -47,7 +45,7 @@ internal static partial class GpuPreviewRenderer
             using ReadOnlyBuffer<uint> input = device.AllocateReadOnlyBuffer(packed);
             using ReadWriteBuffer<uint> output = device.AllocateReadWriteBuffer<uint>(packed.Length);
 
-            float temperature = (float)(Math.Log(Math.Max(1000.0, values[6]) / Math.Max(1000.0, baseTemperature)) * 0.55);
+            float temperature = (float)(Math.Log(Math.Max(1.0, values[6]) / Math.Max(1.0, baseTemperature), 2) * 0.10);
             float tint = (float)(values[7] / 100.0);
 
             device.For(packed.Length, new DevelopPreviewShader(
@@ -98,7 +96,6 @@ internal static partial class GpuPreviewRenderer
         uint[] packed = new uint[checked(width * height)];
         double scaleX = sourceWidth / (double)width;
         double scaleY = sourceHeight / (double)height;
-
         Parallel.For(0, height, new ParallelOptions { CancellationToken = token }, y =>
         {
             int sy = Math.Min(sourceHeight - 1, (int)(y * scaleY));
@@ -138,42 +135,33 @@ internal static partial class GpuPreviewRenderer
             int index = (int)ThreadIds.X;
             int pixelCount = width * height;
             if (index >= pixelCount) return;
-
             uint packed = source[index];
             float b = (packed & 255u) / 255.0f;
             float g = ((packed >> 8) & 255u) / 255.0f;
             float r = ((packed >> 16) & 255u) / 255.0f;
-
             r *= exposure; g *= exposure; b *= exposure;
             r = (r - .5f) * contrast + .5f;
             g = (g - .5f) * contrast + .5f;
             b = (b - .5f) * contrast + .5f;
-
             float luma = .2126f * r + .7152f * g + .0722f * b;
             float shadowMask = Clamp(1 - luma * 2, 0, 1);
             float highlightMask = Clamp((luma - .5f) * 2, 0, 1);
             float whiteMask = Clamp((luma - .7f) / .3f, 0, 1);
             float blackMask = Clamp((.3f - luma) / .3f, 0, 1);
-            float tonal = shadows * shadowMask * .35f + highlights * highlightMask * -.25f + whites * whiteMask * .25f + blacks * blackMask * -.25f;
+            float tonal = shadows * shadowMask * .35f + highlights * highlightMask * .25f + whites * whiteMask * .25f + blacks * blackMask * -.25f;
             r += tonal; g += tonal; b += tonal;
-
-            r += temperature * .10f;
-            b -= temperature * .10f;
-            r += tint * .03f;
-            g -= tint * .03f;
-
+            r += temperature * .10f; b -= temperature * .10f;
+            r += tint * .03f; g -= tint * .03f;
             float gray = (r + g + b) / 3;
             float vibranceFactor = 1 + vibrance * (1 - Abs(gray - .5f) * 2);
             r = gray + (r - gray) * saturation * vibranceFactor;
             g = gray + (g - gray) * saturation * vibranceFactor;
             b = gray + (b - gray) * saturation * vibranceFactor;
-
             uint bb = (uint)(Clamp(b, 0, 1) * 255 + .5f);
             uint gg = (uint)(Clamp(g, 0, 1) * 255 + .5f);
             uint rr = (uint)(Clamp(r, 0, 1) * 255 + .5f);
             output[index] = bb | (gg << 8) | (rr << 16) | 0xFF000000u;
         }
-
         private static float Clamp(float value, float min, float max) => value < min ? min : (value > max ? max : value);
         private static float Abs(float value) => value < 0 ? -value : value;
     }

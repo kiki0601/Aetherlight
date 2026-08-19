@@ -54,7 +54,7 @@ internal static class GpuPreviewRenderer
                 (float)Math.Pow(2, values[0]),
                 (float)((259.0 * (values[1] + 255.0)) / (255.0 * (259.0 - values[1]))),
                 (float)((values[6] - baseTemperature) / 100.0),
-                (float)((values[7] + baseTint) / 100.0),
+                (float)(values[7] / 100.0),
                 (float)(1 + values[9] / 100.0),
                 (float)(values[8] / 100.0),
                 (float)(values[2] / 100.0),
@@ -70,9 +70,9 @@ internal static class GpuPreviewRenderer
             for (int i = 0, p = 0; i < result.Length; i++, p += 4)
             {
                 uint value = result[i];
-                pixels[p] = (byte)(value & 255);
-                pixels[p + 1] = (byte)((value >> 8) & 255);
-                pixels[p + 2] = (byte)((value >> 16) & 255);
+                pixels[p] = (byte)(value & 255u);
+                pixels[p + 1] = (byte)((value >> 8) & 255u);
+                pixels[p + 2] = (byte)((value >> 16) & 255u);
                 pixels[p + 3] = 255;
             }
             return true;
@@ -83,7 +83,6 @@ internal static class GpuPreviewRenderer
         }
         catch
         {
-            // Aetherlight must still work on systems without a usable DX12 GPU.
             _disabled = true;
             pixels = Array.Empty<byte>();
             return false;
@@ -112,9 +111,11 @@ internal static class GpuPreviewRenderer
         return packed;
     }
 
+    // Public accessibility is required because ComputeSharp generates a public
+    // shader descriptor for this type.
     [ThreadGroupSize(DefaultThreadGroupSizes.X)]
     [GeneratedComputeShaderDescriptor]
-    private readonly partial struct DevelopPreviewShader(
+    public readonly partial struct DevelopPreviewShader(
         ReadOnlyBuffer<uint> source,
         ReadWriteBuffer<uint> output,
         int width,
@@ -132,8 +133,8 @@ internal static class GpuPreviewRenderer
     {
         public void Execute()
         {
-            uint index = ThreadIds.X;
-            uint pixelCount = (uint)(width * height);
+            int index = (int)ThreadIds.X;
+            int pixelCount = width * height;
             if (index >= pixelCount) return;
 
             uint packed = source[index];

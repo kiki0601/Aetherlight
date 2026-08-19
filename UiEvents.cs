@@ -11,7 +11,7 @@ namespace Aetherlight;
 
 public partial class MainWindow
 {
-    private int _renderVersion;
+    private int _previewRenderVersion;
     private CancellationTokenSource? _renderCancellation;
     private readonly ConcurrentDictionary<RenderCacheKey, BitmapSource> _previewCache = new();
     private readonly ConcurrentQueue<RenderCacheKey> _previewCacheOrder = new();
@@ -133,7 +133,7 @@ public partial class MainWindow
         _renderCancellation?.Dispose();
         var cts = new CancellationTokenSource();
         _renderCancellation = cts;
-        int version = Interlocked.Increment(ref _renderVersion);
+        int version = Interlocked.Increment(ref _previewRenderVersion);
         _ = RenderScheduledAsync(version, cts.Token, immediate);
     }
 
@@ -152,7 +152,7 @@ public partial class MainWindow
             var key = RenderCacheKey.Create(values, baseTemp, baseTint, width, height);
             if (_previewCache.TryGetValue(key, out BitmapSource? cached))
             {
-                if (version != _renderVersion || token.IsCancellationRequested) return;
+                if (version != _previewRenderVersion || token.IsCancellationRequested) return;
                 DevelopPreview.Source = cached;
                 Preview.Source = cached;
                 return;
@@ -162,11 +162,11 @@ public partial class MainWindow
             byte[] previewPixels = Array.Empty<byte>();
             bool gpuRendered = await Task.Run(() => GpuPreviewRenderer.TryRender(source, width, height, values, baseTemp, baseTint, previewWidth, token, out previewPixels, out _, out _), token);
             token.ThrowIfCancellationRequested();
-            if (version != _renderVersion) return;
+            if (version != _previewRenderVersion) return;
             if (!gpuRendered)
                 previewPixels = await Task.Run(() => RenderPixels(source, width, height, values, baseTemp, baseTint, previewWidth, token), token);
             token.ThrowIfCancellationRequested();
-            if (version != _renderVersion) return;
+            if (version != _previewRenderVersion) return;
 
             int previewHeight = Math.Max(1, (int)Math.Round(height * (previewWidth / (double)width)));
             BitmapSource preview = BitmapSource.Create(previewWidth, previewHeight, 96, 96, PixelFormats.Bgra32, null, previewPixels, previewWidth * 4);
@@ -177,10 +177,10 @@ public partial class MainWindow
 
             await Task.Delay(180, token);
             token.ThrowIfCancellationRequested();
-            if (version != _renderVersion) return;
+            if (version != _previewRenderVersion) return;
             byte[] fullPixels = await Task.Run(() => RenderPixels(source, width, height, values, baseTemp, baseTint, 0, token), token);
             token.ThrowIfCancellationRequested();
-            if (version != _renderVersion) return;
+            if (version != _previewRenderVersion) return;
             BitmapSource full = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, fullPixels, width * 4);
             full.Freeze();
             DevelopPreview.Source = full;

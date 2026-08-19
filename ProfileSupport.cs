@@ -13,6 +13,18 @@ public partial class MainWindow
     private string _selectedProfile = "Camera Standard";
     private bool _profileSupportReady;
     private bool _profileSliderCaptured;
+    private static readonly bool _profileSupportClassHandler = RegisterProfileSupportHandler();
+
+    private static bool RegisterProfileSupportHandler()
+    {
+        EventManager.RegisterClassHandler(typeof(MainWindow), FrameworkElement.LoadedEvent, new RoutedEventHandler(ProfileSupportLoaded));
+        return true;
+    }
+
+    private static void ProfileSupportLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is MainWindow window) window.InitializeProfileSupport();
+    }
 
     private void InitializeProfileSupport()
     {

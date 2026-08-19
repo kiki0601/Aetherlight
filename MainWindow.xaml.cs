@@ -406,7 +406,14 @@ public partial class MainWindow : Window
     private void DrawMaskOverlay() { OverlayCanvas.Children.Clear(); double radius = MaskSizeSlider.Value; foreach (var p in _maskPoints.TakeLast(120)) { Point d = SourceToDisplay(p); var ellipse = new Ellipse { Width = radius * 2, Height = radius * 2, Fill = new SolidColorBrush(Color.FromArgb(55, 255, 80, 80)), Stroke = new SolidColorBrush(Color.FromArgb(110, 255, 100, 100)), StrokeThickness = 1 }; Canvas.SetLeft(ellipse, d.X - radius); Canvas.SetTop(ellipse, d.Y - radius); OverlayCanvas.Children.Add(ellipse); } }
     private void ApplyMask_Click(object sender, RoutedEventArgs e) { ApplyAdjustments(); StatusText.Text = $"Aetherlight • Mask applied • {_maskPoints.Count} brush points"; }
     private void ClearMask_Click(object sender, RoutedEventArgs e) { _maskPoints.Clear(); OverlayCanvas.Children.Clear(); ApplyAdjustments(); StatusText.Text = "Aetherlight • Mask cleared"; }
-    private void MaskExposure_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { MaskExposureValue.Text = MaskExposureSlider.Value.ToString("+0.00;-0.00;0.00"); if (_toolMode == ToolMode.Mask && _originalPixels != null) ApplyAdjustments(); }
+    private void MaskExposure_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (MaskExposureSlider == null) return;
+        if (MaskExposureValue != null)
+            MaskExposureValue.Text = MaskExposureSlider.Value.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
+        if (_toolMode == ToolMode.Mask && _originalPixels != null)
+            ApplyAdjustments();
+    }
 
     private void PickColor(Point displayPoint)
     {

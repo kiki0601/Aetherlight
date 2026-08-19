@@ -47,6 +47,9 @@ internal static partial class GpuPreviewRenderer
             using ReadOnlyBuffer<uint> input = device.AllocateReadOnlyBuffer(packed);
             using ReadWriteBuffer<uint> output = device.AllocateReadWriteBuffer<uint>(packed.Length);
 
+            float temperature = (float)(Math.Log(Math.Max(1000.0, values[6]) / Math.Max(1000.0, baseTemperature)) * 0.55);
+            float tint = (float)(values[7] / 100.0);
+
             device.For(packed.Length, new DevelopPreviewShader(
                 input,
                 output,
@@ -54,8 +57,8 @@ internal static partial class GpuPreviewRenderer
                 height,
                 (float)Math.Pow(2, values[0]),
                 (float)((259.0 * (values[1] + 255.0)) / (255.0 * (259.0 - values[1]))),
-                (float)((values[6] - baseTemperature) / 100.0),
-                (float)(values[7] / 100.0),
+                temperature,
+                tint,
                 (float)(1 + values[9] / 100.0),
                 (float)(values[8] / 100.0),
                 (float)(values[2] / 100.0),

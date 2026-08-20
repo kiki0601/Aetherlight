@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Windows.Media;
@@ -16,7 +17,7 @@ namespace Aetherlight;
 /// </summary>
 internal static class PhotoOrientationFix
 {
-    private static readonly Dictionary<MainWindow, string?> AppliedPaths = new();
+    private static readonly Dictionary<MainWindow, BitmapSource?> AppliedSources = new();
 
     [ModuleInitializer]
     internal static void Register()
@@ -59,6 +60,7 @@ internal static class PhotoOrientationFix
         // that handler has completed so the newly selected photo is available.
         window.Dispatcher.BeginInvoke(new Action(() =>
         {
+            AppliedSources.Remove(window);
             ApplyCurrentPhoto(window);
             OrientFilmstripThumbnails(window);
         }), System.Windows.Threading.DispatcherPriority.ContextIdle);
@@ -89,17 +91,18 @@ internal static class PhotoOrientationFix
     private static void ApplyCurrentPhoto(MainWindow window)
     {
         string? path = window._currentPhotoPath;
-        if (string.IsNullOrWhiteSpace(path) || window._originalSource == null) return;
-        if (string.Equals(AppliedPaths.GetValueOrDefault(window), path, StringComparison.OrdinalIgnoreCase)) return;
+        BitmapSource? source = window._originalSource;
+        if (string.IsNullOrWhiteSpace(path) || source == null) return;
+        if (AppliedSources.TryGetValue(window, out BitmapSource? applied) && ReferenceEquals(applied, source)) return;
 
         try
         {
-            int orientation = GetOrientation(path, window._originalSource);
-            AppliedPaths[window] = path;
+            int orientation = GetOrientation(path, source);
+            AppliedSources[window] = source;
 
             if (orientation == 1) return;
 
-            BitmapSource oriented = Transform(window._originalSource, orientation);
+            BitmapSource oriented = Transform(source, orientation);
             window._originalSource = oriented;
             window.RefreshBasePixels();
             window.ResetAdjustments();
@@ -113,7 +116,7 @@ internal static class PhotoOrientationFix
         {
             // Orientation metadata is optional. A failed metadata read must never
             // prevent the photo from opening.
-            AppliedPaths[window] = path;
+            AppliedSources[window] = source;
         }
     }
 
@@ -151,10 +154,9 @@ internal static class PhotoOrientationFix
     {
         using RawContext raw = RawContext.OpenFile(path);
 
-        // RawContext intentionally exposes the high-level metadata but not the
-        // native sizes.flip field. Read the public wrapper's internal RawData
-        // structure reflectively so this fix remains compatible with Sdcb.LibRaw
-        // releases without depending on an internal type in our project.
+        // RawContext exposes high-level metadata but not the native sizes.flip field.
+        // Read the wrapper's internal RawData structure reflectively so this fix does
+        // not depend on an internal Sdcb.LibRaw type in the Aetherlight project.
         PropertyInfo? rawDataProperty = typeof(RawContext).GetProperty(
             "RawData", BindingFlags.Instance | BindingFlags.NonPublic);
         object? rawData = rawDataProperty?.GetValue(raw);
@@ -218,7 +220,7 @@ internal static class PhotoOrientationFix
 
     private static BitmapSource Transform(BitmapSource source, int orientation)
     {
-        Transform transform = orientation switch
+        System.Windows.Media.Transform transform = orientation switch
         {
             2 => new ScaleTransform(-1, 1, source.PixelWidth / 2.0, source.PixelHeight / 2.0),
             3 => new RotateTransform(180, source.PixelWidth / 2.0, source.PixelHeight / 2.0),
@@ -227,13 +229,11 @@ internal static class PhotoOrientationFix
             6 => new RotateTransform(90, source.PixelWidth / 2.0, source.PixelHeight / 2.0),
             7 => new MatrixTransform(new Matrix(0, -1, -1, 0, source.PixelWidth, source.PixelHeight)),
             8 => new RotateTransform(270, source.PixelWidth / 2.0, source.PixelHeight / 2.0),
-            _ => Transform.Identity
+            _ => System.Windows.Media.Transform.Identity
         };
 
         if (orientation is 5 or 7)
         {
-            // The EXIF 5/7 cases combine a mirror and a 90° rotation. A simple
-            // MatrixTransform needs the output translation explicitly.
             Matrix matrix = orientation == 5
                 ? new Matrix(0, 1, 1, 0, 0, 0)
                 : new Matrix(0, -1, -1, 0, source.PixelWidth, source.PixelHeight);
